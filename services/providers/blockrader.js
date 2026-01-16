@@ -286,44 +286,62 @@ async function createVirtualAccountForChildAddress(childAddressId, kycData) {
   }
 }
 
-async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
-  // 1. Check if NGN virtual account already exists
-  const existing = await Wallet.findOne({ user_id: user._id, currency: "NGN" });
+// async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
+//   // 1. Check if NGN virtual account already exists
+//   const existing = await Wallet.findOne({ user_id: user._id, currency: "NGN" });
 
-  if (existing) {
-    return { fromExisting: true, ...existing.toObject() };
-  }
+//   if (existing) {
+//     return { fromExisting: true, ...existing.toObject() };
+//   }
 
-  // 2. Create a new Virtual Account (this calls Blockrader)
-  const virtualAccount = await createVirtualAccountForChildAddress(
-    childAddressId, // MUST be Blockrader Address UUID
-    kycData // must contain: firstName, lastName, email, phoneNo
-  );
+//   // 2. Create a new Virtual Account (this calls Blockrader)
+//   const virtualAccount = await createVirtualAccountForChildAddress(
+//     childAddressId, // MUST be Blockrader Address UUID
+//     kycData // must contain: firstName, lastName, email, phoneNo
+//   );
 
-  // 3. Save NGN Bank Account in Wallet collection (idempotent)
-  await Wallet.updateOne(
-    { user_id: user._id, currency: "NGN" },
-    {
-      $setOnInsert: {
-        externalWalletId: childAddressId,
-        account_number: virtualAccount.accountNumber,
-        account_name: virtualAccount.accountName,
-        bankName: virtualAccount.bankName,
-        balance: 0,
-        provider: "BLOCKRADAR",
-        status: "ACTIVE",
-      },
-    },
-    { upsert: true, timestamps: false }
-  );
+//   // 3. Save NGN Bank Account in Wallet collection (idempotent)
+//   await Wallet.updateOne(
+//     { user_id: user._id, currency: "NGN" },
+//     {
+//       $setOnInsert: {
+//         externalWalletId: childAddressId,
+//         account_number: virtualAccount.accountNumber,
+//         account_name: virtualAccount.accountName,
+//         bankName: virtualAccount.bankName,
+//         balance: 0,
+//         provider: "BLOCKRADAR",
+//         status: "ACTIVE",
+//       },
+//     },
+//     { upsert: true, timestamps: false }
+//   );
 
-  return { fromExisting: false, ...virtualAccount };
-}
+//   return { fromExisting: false, ...virtualAccount };
+// }
 
 // 💰 NEW HELPER: Get Single Wallet Balance
 // In your blockrader.js file
 
 // 💰 NEW HELPER: Get Single Wallet Balance
+
+const vaResult = await createVirtualAccountForChildAddress(
+  childAddressId,
+  kycData
+);
+
+if (!vaResult?.alreadyExists) {
+  await Wallet.create({
+    user: userId,
+    type: "NGN",
+    accountName: vaResult.accountName,
+    accountNumber: vaResult.accountNumber,
+    bankName: vaResult.bankName,
+    provider: "BLOCKRADER",
+    providerWalletId: vaResult.platformWalletId,
+  });
+}
+
 async function getWalletBalance(externalWalletId, currency) {
   const URL = `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${externalWalletId}/balances`;
 
