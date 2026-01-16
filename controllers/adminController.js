@@ -380,6 +380,10 @@ const adminUpdateKycStatus = async (req, res) => {
         throw new Error("rejectionReason is required when rejecting KYC.");
       }
 
+      if (!kycRecord.user_id) {
+        throw new Error("Cannot process KYC: associated user not found.");
+      }
+
       kycRecord.status = "REJECTED";
       kycRecord.rejectionReason = rejectionReason;
       await kycRecord.save();
