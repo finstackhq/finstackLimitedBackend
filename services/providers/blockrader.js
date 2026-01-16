@@ -224,63 +224,68 @@ async function createStablecoinAddress({ userId, email, name }) {
 // 🏦 CREATE VIRTUAL ACCOUNT (linked to Child Address)
 async function createVirtualAccountForChildAddress(childAddressId, kycData) {
   const context = "Create Virtual Account (CNGN Deposit) for Child Address";
-  if (!BLOCKRADER_MASTER_WALLET_UUID) {
-    throw new Error(
-      "FATAL: Master Wallet UUID (COMPANY_ESCROW_ACCOUNT_ID) is missing or undefined."
-    );
-  }
-  if (!childAddressId) {
-    throw new Error(
-      "CRITICAL: Child Address ID is missing for Virtual Account creation."
-    );
-  } // Ensure phone number is in the required format: +234XXXXXXXXXX
-  let phoneInFormat = kycData.phoneNo;
-  if (phoneInFormat && !phoneInFormat.startsWith("+")) {
-    phoneInFormat = `+234${
-      phoneInFormat.startsWith("0") ? phoneInFormat.substring(1) : phoneInFormat
-    }`;
-  }
-
-  const payload = {
-    firstname: kycData.firstName,
-    lastname: kycData.lastName,
-    email: kycData.email,
-    phone: phoneInFormat, // type: "AUTO_FUNDING" is the default.
-  }; // 🚀 CRITICAL ENDPOINT CHANGE 🚀 // Endpoint: POST /wallets/{masterWalletId}/addresses/{childAddressId}/virtual-accounts
-  const url = `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`;
 
   try {
-    console.log(
-      `[Blockrader] Attempting to create Virtual Account for ${kycData.email} linked to Address ID: ${childAddressId}`
+    const response = await axios.post(
+      `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
+      {
+        firstname: kycData.firstName,
+        lastname: kycData.lastName,
+        email: kycData.email,
+        phone: kycData.phoneNo,
+      },
+      { headers }
     );
 
-    const response = await axios.post(url, payload, { headers });
-    if (response.data.statusCode !== 201 || response.data.status === "error") {
-      throw new Error(
-        response.data.message ||
-          "Blockrader Virtual Account creation failed with unknown error."
-      );
-    }
     const data = response.data.data;
-    console.log(
-      `[Blockrader] Virtual Account created successfully. Account Number: ${data.accountNumber}`
-    ); // Return the essential details
 
     return {
       accountName: data.accountName,
-      accountNumber: data.accountNumber, // The virtual account number for deposits
+      accountNumber: data.accountNumber,
       bankName: data.bankName,
       customerId: data.customer.id,
-      platformWalletId: data.wallet.id, // This should be the Child Address ID
+      platformWalletId: data.wallet.id,
     };
   } catch (error) {
-    logBlockraderError(context, error);
+    const message = error.response?.data?.message;
+
+    // ✅ THIS IS THE FIX
+    if (
+      error.response?.status === 400 &&
+      message?.toLowerCase().includes("already exists")
+    ) {
+      console.warn(
+        "[Blockrader] Virtual account already exists — treating as success"
+      );
+
+      // 🔁 Fetch existing virtual account
+      const existing = await axios.get(
+        `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
+        { headers }
+      );
+
+      const data = existing.data?.data?.[0];
+      if (!data) {
+        throw new Error("Virtual account exists but could not be retrieved");
+      }
+
+      return {
+        accountName: data.accountName,
+        accountNumber: data.accountNumber,
+        bankName: data.bankName,
+        customerId: data.customer?.id,
+        platformWalletId: data.wallet?.id,
+      };
+    }
+
+    // ❌ real error
     throw new Error(
       "Failed to create user's CNGN deposit account: " +
-        (error.response?.data?.message || error.message)
+        (message || error.message)
     );
   }
 }
+
 async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
   // 1. Check if NGN virtual account already exists
   const existing = await Wallet.findOne({ user_id: user._id, currency: "NGN" });
