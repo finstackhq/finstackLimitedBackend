@@ -1,110 +1,58 @@
-// const jwt = require("jsonwebtoken");
-// const User = require("../models/userModel")
-
-// const verifyToken = async (req, res, next) => {
-//   const tokenString = req.headers.authorization;
-//   if (!tokenString) {
-//     return res.status(401).json({ message: "Authorization token is missing" });
-//   }
-
-//   // Expecting format: "Bearer <token>"
-//   const token = tokenString.split(" ")[1];
-//   if (!token) {
-//     return res.status(401).json({ message: "Authorization token is missing" });
-//   }
-
-//   try {
-//     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET); 
-//     const user = await User.findById(decoded.id);
-
-//     if (!user) {
-//       return res.status(404).json({ message: "User not found" });
-//     }
-
-//     // Attach safe user info to request (so protected routes can access it)
-//     req.user = {
-//       id: user._id,
-//       email: user.email,
-//       role: user.role,
-//       firstName: user.firstName,
-//       lastName: user.lastName,
-//        kycVerified: user.kycVerified,
-//     };
-
-//     next();
-//   } catch (error) {
-//     console.error("Token verification error:", error);
-//     return res.status(401).json({ message: "Invalid or expired token" });
-//   }
-// };
-
-// const isAdmin = (req, res, next) => {
-//   if (req.user.role !== "admin") {
-//     return res.status(403).json({ message: "Access denied: Admins only" });
-//   }
-//   next();
-// };
-
-// module.exports = {verifyToken, isAdmin};
 const jwt = require("jsonwebtoken");
 const User = require("../models/userModel");
-const BlacklistedToken = require('../models/blackListTokenModel'); 
+const BlacklistedToken = require("../models/blackListTokenModel");
 
 const verifyToken = async (req, res, next) => {
-  const tokenString = req.headers.authorization;
-  
-  if (!tokenString) {
-    return res.status(401).json({ message: "Authorization token is missing" });
-  }
+  const tokenString = req.headers.authorization;
+  if (!tokenString) {
+    return res.status(401).json({ message: "Authorization token is missing" });
+  } // Expecting format: "Bearer <token>"
 
-  // Expecting format: "Bearer <token>"
-  const token = tokenString.split(" ")[1];
-  if (!token) {
-    return res.status(401).json({ message: "Authorization token is missing" });
-  }
+  const token = tokenString.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ message: "Authorization token is missing" });
+  }
 
-  try {
+  try {
     // 2. CHECK TOKEN BLACKLIST FIRST
     const blacklisted = await BlacklistedToken.findOne({ token }).lean();
     if (blacklisted) {
-        // If the token is found in the blacklist, it was explicitly revoked (logged out)
-        return res.status(401).json({ message: "Invalid or expired token (Logged out)" });
-    }
+      // If the token is found in the blacklist, it was explicitly revoked (logged out)
+      return res
+        .status(401)
+        .json({ message: "Invalid or expired token (Logged out)" });
+    } // 3. Standard JWT verification (signature and expiration check)
     // ----------------------------------------------------
 
-    // 3. Standard JWT verification (signature and expiration check)
-    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET); 
-    
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
     // 4. User lookup (Your existing logic)
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id);
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    } // Attach safe user info to request
 
-    // Attach safe user info to request
-    req.user = {
-      id: user._id,
-      email: user.email,
-      role: user.role,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      kycVerified: user.kycVerified,
-    };
+    req.user = {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      kycVerified: user.kycVerified,
+    };
 
-    next();
-  } catch (error) {
-    console.error("Token verification error:", error);
-    // This error now correctly handles: Signature failure, expired token, or blacklisted token
-    return res.status(401).json({ message: "Invalid or expired token" });
-  }
+    next();
+  } catch (error) {
+    console.error("Token verification error:", error); // This error now correctly handles: Signature failure, expired token, or blacklisted token
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
 };
 
 const isAdmin = (req, res, next) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ message: "Access denied: Admins only" });
-  }
-  next();
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ message: "Access denied: Admins only" });
+  }
+  next();
 };
 
-module.exports = {verifyToken, isAdmin};
+module.exports = { verifyToken, isAdmin };

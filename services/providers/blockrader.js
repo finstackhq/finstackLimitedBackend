@@ -61,6 +61,7 @@ async function createWalletRecord({
   externalWalletId,
   accountNumber,
   accountName,
+  bankName,
   session,
   walletAddress,
 }) {
@@ -70,8 +71,9 @@ async function createWalletRecord({
     currency,
     externalWalletId: externalWalletId || null,
     walletAddress: walletAddress || null,
-    account_number: accountNumber || null,
-    account_name: accountName || null,
+    accountNumber: accountNumber || null, // <-- match schema
+    accountName: accountName || null, // <-- match schema
+    bankName: bankName || null,
     provider: "BLOCKRADAR",
     status: "ACTIVE",
   };

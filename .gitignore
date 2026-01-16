@@ -2,3 +2,5 @@
 /.env
 logs/
 combined.log/
+# Ignore maintenance scripts
+/scripts/
