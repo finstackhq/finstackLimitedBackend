@@ -222,6 +222,70 @@ async function createStablecoinAddress({ userId, email, name }) {
 }
 
 // 🏦 CREATE VIRTUAL ACCOUNT (linked to Child Address)
+// async function createVirtualAccountForChildAddress(childAddressId, kycData) {
+//   const context = "Create Virtual Account (CNGN Deposit) for Child Address";
+
+//   try {
+//     const response = await axios.post(
+//       `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
+//       {
+//         firstname: kycData.firstName,
+//         lastname: kycData.lastName,
+//         email: kycData.email,
+//         phone: kycData.phoneNo,
+//       },
+//       { headers }
+//     );
+
+//     const data = response.data.data;
+
+//     return {
+//       accountName: data.accountName,
+//       accountNumber: data.accountNumber,
+//       bankName: data.bankName,
+//       customerId: data.customer.id,
+//       platformWalletId: data.wallet.id,
+//     };
+//   } catch (error) {
+//     const message = error.response?.data?.message;
+
+//     // ✅ THIS IS THE FIX
+//     if (
+//       error.response?.status === 400 &&
+//       message?.toLowerCase().includes("already exists")
+//     ) {
+//       console.warn(
+//         "[Blockrader] Virtual account already exists — treating as success"
+//       );
+
+//       // 🔁 Fetch existing virtual account
+//       const existing = await axios.get(
+//         `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
+//         { headers }
+//       );
+
+//       const data = existing.data?.data?.[0];
+//       if (!data) {
+//         throw new Error("Virtual account exists but could not be retrieved");
+//       }
+
+//       return {
+//         accountName: data.accountName,
+//         accountNumber: data.accountNumber,
+//         bankName: data.bankName,
+//         customerId: data.customer?.id,
+//         platformWalletId: data.wallet?.id,
+//       };
+//     }
+
+//     // ❌ real error
+//     throw new Error(
+//       "Failed to create user's CNGN deposit account: " +
+//         (message || error.message)
+//     );
+//   }
+// }
+// 🏦 CREATE VIRTUAL ACCOUNT (linked to Child Address)
 async function createVirtualAccountForChildAddress(childAddressId, kycData) {
   const context = "Create Virtual Account (CNGN Deposit) for Child Address";
 
@@ -247,38 +311,22 @@ async function createVirtualAccountForChildAddress(childAddressId, kycData) {
       platformWalletId: data.wallet.id,
     };
   } catch (error) {
-    const message = error.response?.data?.message;
+    const message = error.response?.data?.message || "";
 
-    // ✅ THIS IS THE FIX
+    // ✅ THIS IS THE FIX: Handle "already exists" safely
     if (
       error.response?.status === 400 &&
-      message?.toLowerCase().includes("already exists")
+      message.toLowerCase().includes("already exists")
     ) {
       console.warn(
-        "[Blockrader] Virtual account already exists — treating as success"
+        "[Blockrader] Virtual account already exists — skipping creation"
       );
 
-      // 🔁 Fetch existing virtual account
-      const existing = await axios.get(
-        `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
-        { headers }
-      );
-
-      const data = existing.data?.data?.[0];
-      if (!data) {
-        throw new Error("Virtual account exists but could not be retrieved");
-      }
-
-      return {
-        accountName: data.accountName,
-        accountNumber: data.accountNumber,
-        bankName: data.bankName,
-        customerId: data.customer?.id,
-        platformWalletId: data.wallet?.id,
-      };
+      // ⚠️ DO NOT try to fetch the existing account — just return a flag
+      return { alreadyExists: true };
     }
 
-    // ❌ real error
+    // ❌ Any other error is real
     throw new Error(
       "Failed to create user's CNGN deposit account: " +
         (message || error.message)
@@ -318,6 +366,7 @@ async function createVirtualAccountForChildAddress(childAddressId, kycData) {
 //   );
 
 //   return { fromExisting: false, ...virtualAccount };
+
 // }
 
 // 💰 NEW HELPER: Get Single Wallet Balance
@@ -325,21 +374,42 @@ async function createVirtualAccountForChildAddress(childAddressId, kycData) {
 
 // 💰 NEW HELPER: Get Single Wallet Balance
 
-const vaResult = await createVirtualAccountForChildAddress(
-  childAddressId,
-  kycData
-);
+async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
+  const existing = await Wallet.findOne({ user_id: user._id, currency: "NGN" });
 
-if (!vaResult?.alreadyExists) {
-  await Wallet.create({
-    user: userId,
-    type: "NGN",
-    accountName: vaResult.accountName,
-    accountNumber: vaResult.accountNumber,
-    bankName: vaResult.bankName,
-    provider: "BLOCKRADER",
-    providerWalletId: vaResult.platformWalletId,
-  });
+  if (existing) {
+    return { fromExisting: true, ...existing.toObject() };
+  }
+
+  // Attempt to create new virtual account
+  const virtualAccount = await createVirtualAccountForChildAddress(
+    childAddressId,
+    kycData
+  );
+
+  // If it already exists, just mark as fromExisting (DB record may already exist)
+  if (virtualAccount.alreadyExists) {
+    return { fromExisting: true };
+  }
+
+  // Otherwise, save in MongoDB
+  await Wallet.updateOne(
+    { user_id: user._id, currency: "NGN" },
+    {
+      $setOnInsert: {
+        externalWalletId: childAddressId,
+        account_number: virtualAccount.accountNumber,
+        account_name: virtualAccount.accountName,
+        bankName: virtualAccount.bankName,
+        balance: 0,
+        provider: "BLOCKRADAR",
+        status: "ACTIVE",
+      },
+    },
+    { upsert: true, timestamps: false }
+  );
+
+  return { fromExisting: false, ...virtualAccount };
 }
 
 async function getWalletBalance(externalWalletId, currency) {
