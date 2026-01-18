@@ -64,37 +64,7 @@ const registerUser = async (req, res) => {
     res.status(500).json({ message: "Server Error", error: error.message });
   }
 };
-// Verify Email
-// const verifyEmail = async (req, res) => {
-//   const { verificationCode } = req.params;
-//   if (!verificationCode) {
-//     return res.status(400).json({ message: "Verification token required" });
-//   }
-//   try {
-//     // Verify the token and extract email
-//     const decoded = jwt.verify(
-//       verificationCode,
-//       process.env.EMAIL_VERIFICATION_SECRET
-//     );
 
-// // Find user by verification code
-//     const user = await User.findOne({ verificationCode });
-//     if (!user || user.email !== decoded.email) {
-//       return res.status(401).json({ message: "Invalid or expired verification code" });
-//     }
-// // Check if already verified
-//     user.isVerified = true;
-//     user.verificationCode = null;
-//     await user.save();
-// // Send confirmation email
-//     const html = generateVerificationSuccessMail(user.firstName);
-//     await sendMail(user.email, "Email Verified - Finstack", html);
-// // Respond with success
-//     return res.status(200).json({ message: "Email verified successfully", user: { firstName: user.firstName, lastName: user.lastName, email: user.email, isVerified: user.isVerified } });
-//   } catch (error) {
-//     return res.status(500).json({ message: "Internal server error", error: error.message });
-//   }
-// };
 const verifyEmail = async (req, res) => {
   const { token } = req.query;
 

@@ -27,7 +27,7 @@ function logBlockraderError(context, error) {
     console.error(
       `[Blockrader] ${context} failed with status: ${
         error.response.status
-      }. API Message: ${apiMessage || "No specific message"}`
+      }. API Message: ${apiMessage || "No specific message"}`,
     );
   } else {
     console.error(`[Blockrader] ${context} failed:`, error.message);
@@ -45,10 +45,10 @@ function getAssetId(currency) {
       return BLOCKRADER_CNGN_ASSET_ID;
     default:
       console.error(
-        `Unsupported stablecoin asset ID requested for currency: ${currency}`
+        `Unsupported stablecoin asset ID requested for currency: ${currency}`,
       );
       throw new Error(
-        `Unsupported stablecoin currency for escrow: ${currency}`
+        `Unsupported stablecoin currency for escrow: ${currency}`,
       );
   }
 }
@@ -84,7 +84,7 @@ async function createWalletRecord({
     await Wallet.updateOne(
       filter,
       { $setOnInsert: setOnInsert },
-      { upsert: true, session, timestamps: false }
+      { upsert: true, session, timestamps: false },
     );
 
     // return the current wallet (existing or newly created)
@@ -146,7 +146,7 @@ async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
   // Only call Blockrader here
   const virtualAccount = await createVirtualAccountForChildAddress(
     childAddressId,
-    kycData
+    kycData,
   );
 
   return { fromExisting: false, ...virtualAccount };
@@ -182,7 +182,7 @@ async function createStablecoinAddress({ userId, email, name }) {
   try {
     if (!BLOCKRADER_MASTER_WALLET_UUID) {
       throw new Error(
-        "FATAL: Master Wallet UUID (COMPANY_ESCROW_ACCOUNT_ID) is missing or undefined."
+        "FATAL: Master Wallet UUID (COMPANY_ESCROW_ACCOUNT_ID) is missing or undefined.",
       );
     }
 
@@ -193,7 +193,7 @@ async function createStablecoinAddress({ userId, email, name }) {
         metadata: { userId, email },
         name: `${name}'s Escrow Address`,
       },
-      { headers }
+      { headers },
     );
 
     // ✅ CRITICAL FIX: Extract the actual data payload from the nested 'data' field
@@ -201,12 +201,12 @@ async function createStablecoinAddress({ userId, email, name }) {
 
     if (!responseData || !responseData.id || !responseData.address) {
       throw new Error(
-        "Invalid response from Blockrader API: Missing address ID or crypto address in data payload."
+        "Invalid response from Blockrader API: Missing address ID or crypto address in data payload.",
       );
     }
 
     console.log(
-      `[Blockrader] New Address created under Master Wallet for ${email}. ID: ${responseData.id}`
+      `[Blockrader] New Address created under Master Wallet for ${email}. ID: ${responseData.id}`,
     );
 
     // 💡 CHANGE: DO NOT create a Wallet record here. Just return the Blockrader address details.
@@ -218,7 +218,7 @@ async function createStablecoinAddress({ userId, email, name }) {
   } catch (error) {
     logBlockraderError("Create Stablecoin Address", error);
     throw new Error(
-      `Unable to create user address on Blockrader: ${error.message}`
+      `Unable to create user address on Blockrader: ${error.message}`,
     );
   }
 }
@@ -249,48 +249,29 @@ async function createStablecoinAddress({ userId, email, name }) {
 //       platformWalletId: data.wallet.id,
 //     };
 //   } catch (error) {
-//     const message = error.response?.data?.message;
+//     const message = error.response?.data?.message || "";
 
-//     // ✅ THIS IS THE FIX
+//     // ✅ THIS IS THE FIX: Handle "already exists" safely
 //     if (
 //       error.response?.status === 400 &&
-//       message?.toLowerCase().includes("already exists")
+//       message.toLowerCase().includes("already exists")
 //     ) {
 //       console.warn(
-//         "[Blockrader] Virtual account already exists — treating as success"
+//         "[Blockrader] Virtual account already exists — skipping creation"
 //       );
 
-//       // 🔁 Fetch existing virtual account
-//       const existing = await axios.get(
-//         `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
-//         { headers }
-//       );
-
-//       const data = existing.data?.data?.[0];
-//       if (!data) {
-//         throw new Error("Virtual account exists but could not be retrieved");
-//       }
-
-//       return {
-//         accountName: data.accountName,
-//         accountNumber: data.accountNumber,
-//         bankName: data.bankName,
-//         customerId: data.customer?.id,
-//         platformWalletId: data.wallet?.id,
-//       };
+//       // ⚠️ DO NOT try to fetch the existing account — just return a flag
+//       return { alreadyExists: true };
 //     }
 
-//     // ❌ real error
+//     // ❌ Any other error is real
 //     throw new Error(
 //       "Failed to create user's CNGN deposit account: " +
 //         (message || error.message)
 //     );
 //   }
 // }
-// 🏦 CREATE VIRTUAL ACCOUNT (linked to Child Address)
 async function createVirtualAccountForChildAddress(childAddressId, kycData) {
-  const context = "Create Virtual Account (CNGN Deposit) for Child Address";
-
   try {
     const response = await axios.post(
       `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
@@ -300,7 +281,7 @@ async function createVirtualAccountForChildAddress(childAddressId, kycData) {
         email: kycData.email,
         phone: kycData.phoneNo,
       },
-      { headers }
+      { headers },
     );
 
     const data = response.data.data;
@@ -315,103 +296,119 @@ async function createVirtualAccountForChildAddress(childAddressId, kycData) {
   } catch (error) {
     const message = error.response?.data?.message || "";
 
-    // ✅ THIS IS THE FIX: Handle "already exists" safely
+    // ✅ If it already exists, fetch the existing VA
     if (
       error.response?.status === 400 &&
       message.toLowerCase().includes("already exists")
     ) {
       console.warn(
-        "[Blockrader] Virtual account already exists — skipping creation"
+        "[Blockrader] Virtual account already exists — fetching existing account",
       );
 
-      // ⚠️ DO NOT try to fetch the existing account — just return a flag
-      return { alreadyExists: true };
+      // Fetch the existing virtual account list
+      const existingResp = await axios.get(
+        `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
+        { headers },
+      );
+
+      const data = existingResp.data?.data?.[0]; // take the first one
+      if (!data)
+        throw new Error("Virtual account exists but could not be retrieved");
+
+      return {
+        accountName: data.accountName,
+        accountNumber: data.accountNumber,
+        bankName: data.bankName,
+        customerId: data.customer?.id,
+        platformWalletId: data.wallet?.id,
+      };
     }
 
-    // ❌ Any other error is real
+    // ❌ any other error
     throw new Error(
       "Failed to create user's CNGN deposit account: " +
-        (message || error.message)
+        (message || error.message),
     );
   }
 }
 
-// async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
-//   // 1. Check if NGN virtual account already exists
-//   const existing = await Wallet.findOne({ user_id: user._id, currency: "NGN" });
-
-//   if (existing) {
-//     return { fromExisting: true, ...existing.toObject() };
-//   }
-
-//   // 2. Create a new Virtual Account (this calls Blockrader)
-//   const virtualAccount = await createVirtualAccountForChildAddress(
-//     childAddressId, // MUST be Blockrader Address UUID
-//     kycData // must contain: firstName, lastName, email, phoneNo
-//   );
-
-//   // 3. Save NGN Bank Account in Wallet collection (idempotent)
-//   await Wallet.updateOne(
-//     { user_id: user._id, currency: "NGN" },
-//     {
-//       $setOnInsert: {
-//         externalWalletId: childAddressId,
-//         account_number: virtualAccount.accountNumber,
-//         account_name: virtualAccount.accountName,
-//         bankName: virtualAccount.bankName,
-//         balance: 0,
-//         provider: "BLOCKRADAR",
-//         status: "ACTIVE",
-//       },
-//     },
-//     { upsert: true, timestamps: false }
-//   );
-
-//   return { fromExisting: false, ...virtualAccount };
-
-// }
-
-// 💰 NEW HELPER: Get Single Wallet Balance
-// In your blockrader.js file
-
-// 💰 NEW HELPER: Get Single Wallet Balance
-
 async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
-  const existing = await Wallet.findOne({ user_id: user._id, currency: "NGN" });
+  // 1️⃣ Check if NGN wallet already exists in DB
+  let existingWallet = await Wallet.findOne({
+    user_id: user._id,
+    currency: "NGN",
+  });
 
-  if (existing) {
-    return { fromExisting: true, ...existing.toObject() };
+  if (existingWallet) {
+    // Already exists, return complete object
+    return { fromExisting: true, ...existingWallet.toObject() };
   }
 
-  // Attempt to create new virtual account
-  const virtualAccount = await createVirtualAccountForChildAddress(
-    childAddressId,
-    kycData
-  );
+  // 2️⃣ Attempt to create NGN Virtual Account on Blockrader
+  let virtualAccount;
+  try {
+    virtualAccount = await createVirtualAccountForChildAddress(
+      childAddressId,
+      kycData,
+    );
+  } catch (error) {
+    // If "already exists", fetch the existing VA from Blockrader
+    if (
+      error.message.includes("already exists") ||
+      error.response?.data?.message?.toLowerCase().includes("already exists")
+    ) {
+      console.warn(
+        "[Blockrader] Virtual account already exists — fetching existing account",
+      );
 
-  // If it already exists, just mark as fromExisting (DB record may already exist)
-  if (virtualAccount.alreadyExists) {
-    return { fromExisting: true };
+      const existingResp = await axios.get(
+        `${BLOCKRADER_BASE_URL}/wallets/${BLOCKRADER_MASTER_WALLET_UUID}/addresses/${childAddressId}/virtual-accounts`,
+        { headers },
+      );
+
+      const data = existingResp.data?.data?.[0]; // take the first VA
+      if (!data)
+        throw new Error("Virtual account exists but could not be retrieved");
+
+      virtualAccount = {
+        accountName: data.accountName,
+        accountNumber: data.accountNumber,
+        bankName: data.bankName,
+        customerId: data.customer?.id,
+        platformWalletId: data.wallet?.id,
+      };
+    } else {
+      throw error; // propagate other real errors
+    }
   }
 
-  // Otherwise, save in MongoDB
-  await Wallet.updateOne(
-    { user_id: user._id, currency: "NGN" },
-    {
-      $setOnInsert: {
-        externalWalletId: childAddressId,
-        account_number: virtualAccount.accountNumber,
-        account_name: virtualAccount.accountName,
-        bankName: virtualAccount.bankName,
-        balance: 0,
-        provider: "BLOCKRADAR",
-        status: "ACTIVE",
-      },
+  // 3️⃣ Ensure MongoDB has a wallet record (upsert safely)
+  const update = {
+    $setOnInsert: {
+      user_id: user._id,
+      currency: "NGN",
+      externalWalletId: childAddressId,
+      account_number: virtualAccount.accountNumber,
+      account_name: virtualAccount.accountName,
+      bankName: virtualAccount.bankName,
+      balance: 0,
+      provider: "BLOCKRADAR",
+      status: "ACTIVE",
     },
-    { upsert: true, timestamps: false }
-  );
+  };
 
-  return { fromExisting: false, ...virtualAccount };
+  await Wallet.updateOne({ user_id: user._id, currency: "NGN" }, update, {
+    upsert: true,
+    timestamps: false,
+  });
+
+  // 4️⃣ Fetch the saved wallet to ensure consistency and return
+  const savedWallet = await Wallet.findOne({
+    user_id: user._id,
+    currency: "NGN",
+  });
+
+  return { fromExisting: false, ...savedWallet.toObject() };
 }
 
 async function getWalletBalance(externalWalletId, currency) {
@@ -426,7 +423,7 @@ async function getWalletBalance(externalWalletId, currency) {
     const targetBalance = balancesArray.find(
       (b) =>
         b.asset?.asset?.symbol?.toLowerCase() === currency.toLowerCase() &&
-        b.asset.isActive === true
+        b.asset.isActive === true,
     );
     // ------------------
 
@@ -459,7 +456,7 @@ async function getWalletBalance(externalWalletId, currency) {
     const status = error.response?.status;
     if (status === 404) {
       throw new Error(
-        "Unable to fetch wallet balance: Master or Address ID not found on Blockradar."
+        "Unable to fetch wallet balance: Master or Address ID not found on Blockradar.",
       );
     }
     throw new Error("Unable to fetch wallet balance: API call failed.");
@@ -473,13 +470,13 @@ async function getUserAddressId(userId) {
   if (!wallet) {
     // This addresses Error 1: Wallet not found
     throw new Error(
-      `Wallet document not found for user ${userId} and currency USD.`
+      `Wallet document not found for user ${userId} and currency USD.`,
     );
   }
   if (!wallet.account_number) {
     // This addresses Error 1 and 3: The 0x address is missing from the DB record
     throw new Error(
-      `Wallet found for user ${userId}, but the required 'account_number' (crypto address) is missing.`
+      `Wallet found for user ${userId}, but the required 'account_number' (crypto address) is missing.`,
     );
   } // We return the Address UUID (stored as externalWalletId)
 
@@ -494,7 +491,7 @@ async function getTransferFee(asset = "USD") {
   try {
     const { data } = await axios.get(
       `${BLOCKRADER_BASE_URL}/fees?asset=${asset}`,
-      { headers }
+      { headers },
     );
     return data;
   } catch (error) {
@@ -508,15 +505,15 @@ async function fundChildWallet(
   destinationCryptoAddress,
   amount,
   currency,
-  p2pReference = null
+  p2pReference = null,
 ) {
   try {
     console.log(
-      `[Blockrader] Attempting internal funding of ${amount} ${currency} from Master Wallet → Child Crypto Address ${destinationCryptoAddress}`
+      `[Blockrader] Attempting internal funding of ${amount} ${currency} from Master Wallet → Child Crypto Address ${destinationCryptoAddress}`,
     ); // CRITICAL: Ensure Master UUID is present
     if (!BLOCKRADER_MASTER_WALLET_UUID) {
       throw new Error(
-        "FATAL: Master Wallet UUID (COMPANY_ESCROW_ACCOUNT_ID) is missing or undefined."
+        "FATAL: Master Wallet UUID (COMPANY_ESCROW_ACCOUNT_ID) is missing or undefined.",
       );
     } // Using the documented Master Wallet Withdrawal endpoint for Master -> Child funding
 
@@ -532,18 +529,18 @@ async function fundChildWallet(
         amount: amount.toString(), // ✅ FIX 1: Use the P2P reference for reconciliation
         reference: reference,
       },
-      { headers }
+      { headers },
     );
     const txId = data.data?.id || data.id;
     console.log(
       "[Blockrader] Child Wallet funding successful. Transaction ID:",
-      txId
+      txId,
     );
     return data;
   } catch (error) {
     logBlockraderError("Fund Child Wallet (Master -> Child)", error);
     throw new Error(
-      "Funding transfer failed at provider level. Check Master balance and destination address."
+      "Funding transfer failed at provider level. Check Master balance and destination address.",
     );
   }
 }
@@ -569,7 +566,7 @@ async function transferFunds(
   amount,
   currency,
   destinationCryptoAddress,
-  p2pReference = null
+  p2pReference = null,
 ) {
   const assetId = getAssetId(currency);
 
@@ -577,19 +574,19 @@ async function transferFunds(
     // --- Flow 1: Master -> Child (Settlement/Reversal) ---
     // This is Master Wallet (source UUID) -> User Child Address (destination crypto address).
     console.log(
-      `[Blockrader] P2P Router: Executing Master Wallet -> Child Address settlement/reversal.`
+      `[Blockrader] P2P Router: Executing Master Wallet -> Child Address settlement/reversal.`,
     ); // Pass the p2pReference down to fundChildWallet
     return fundChildWallet(
       destinationCryptoAddress,
       amount,
       currency,
-      p2pReference
+      p2pReference,
     );
   } else if (destinationAddressId === BLOCKRADER_MASTER_WALLET_UUID) {
     // --- Flow 2: Child -> Master (Escrow) ---
     // This is User Child Address (source UUID) -> Master Wallet (destination crypto address).
     console.log(
-      `[Blockrader] P2P Router: Executing Child Address -> Master Wallet escrow.`
+      `[Blockrader] P2P Router: Executing Child Address -> Master Wallet escrow.`,
     ); // The P2P reference is preferred, falling back to a unique escrow ID
 
     const reference = p2pReference || `ESCROW-${sourceAddressId}-${Date.now()}`; // Use the source address ID (child address UUID) for the withdraw endpoint
@@ -605,23 +602,23 @@ async function transferFunds(
           requestId: reference, // Use reference as idempotency key // ✅ FIX 2: Add the P2P reference for webhook reconciliation
           reference: reference,
         },
-        { headers }
+        { headers },
       );
 
       console.log(
         "[Blockrader] Escrow to Master successful. Transaction ID:",
-        data.transferId || data.id
+        data.transferId || data.id,
       );
       return data;
     } catch (error) {
       logBlockraderError("Escrow to Master (Child -> Master)", error);
       throw new Error(
-        "Escrow transfer failed at provider level. Check user balance and API configuration."
+        "Escrow transfer failed at provider level. Check user balance and API configuration.",
       );
     }
   } else {
     throw new Error(
-      "Unsupported P2P transfer flow: Transfer must involve the Master Escrow Wallet."
+      "Unsupported P2P transfer flow: Transfer must involve the Master Escrow Wallet.",
     );
   }
 }
@@ -644,17 +641,17 @@ async function withdrawFromBlockrader(
   amount,
   currency,
   idempotencyKey,
-  p2pReference = null
+  p2pReference = null,
 ) {
   if (!idempotencyKey) {
     throw new Error(
-      "External withdrawal requires a unique idempotencyKey for safety."
+      "External withdrawal requires a unique idempotencyKey for safety.",
     );
   }
 
   try {
     console.log(
-      `[Blockrader] Attempting external withdrawal of  ${amount} ${currency} from child ID ${sourceAddressId} to external ${toCryptoAddress}`
+      `[Blockrader] Attempting external withdrawal of  ${amount} ${currency} from child ID ${sourceAddressId} to external ${toCryptoAddress}`,
     );
 
     // This endpoint uses the correct documented format: /wallets/{masterId}/addresses/{sourceId}/withdraw
@@ -669,7 +666,7 @@ async function withdrawFromBlockrader(
         requestId: idempotencyKey,
         reference: p2pReference || idempotencyKey,
       },
-      { headers }
+      { headers },
     );
 
     console.log("[Blockrader] External Withdrawal successful:", data);
@@ -698,14 +695,14 @@ async function getTotalTransactionVolume(
   assets,
   page = 1,
   limit = 100,
-  totalVolume = 0
+  totalVolume = 0,
 ) {
   const context = `Get Total Volume (Type: ${type}, Assets: ${assets.join(
-    ", "
+    ", ",
   )})`;
   if (!BLOCKRADER_MASTER_WALLET_UUID) {
     throw new Error(
-      "FATAL: Master Wallet UUID is missing for volume calculation."
+      "FATAL: Master Wallet UUID is missing for volume calculation.",
     );
   }
 
@@ -746,7 +743,7 @@ async function getTotalTransactionVolume(
         assets,
         page + 1,
         limit,
-        currentTotal
+        currentTotal,
       );
     }
 
@@ -755,7 +752,7 @@ async function getTotalTransactionVolume(
   } catch (error) {
     logBlockraderError(context, error);
     throw new Error(
-      `Failed to fetch total transaction volume from Blockrader: ${error.message}`
+      `Failed to fetch total transaction volume from Blockrader: ${error.message}`,
     );
   }
 }
