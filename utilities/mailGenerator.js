@@ -1,4 +1,22 @@
 const { getDatTimeUTC } = require("./dateHelper");
+const SUPPORT_FOOTER = `
+<tr>
+  <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
+    <p style="margin: 0 0 8px 0; font-size: 14px;">
+      <strong>Support:</strong><br/>
+      WhatsApp: <a href="https://wa.me/2348164458437" style="color: #2F67FA; text-decoration: none;">
+        +234 816 445 8437
+      </a><br/>
+      Email: <a href="mailto:hello@usefinstack.co" style="color: #2F67FA;">
+        hello@usefinstack.co
+      </a>
+    </p>
+    <p style="margin: 0; font-size: 12px; color: #777;">
+      © ${new Date().getFullYear()} Finstack. All rights reserved.
+    </p>
+  </td>
+</tr>
+`;
 
 const generateNewUserMail = (verificationCode, firstName) => {
   return `
@@ -57,16 +75,7 @@ const generateNewUserMail = (verificationCode, firstName) => {
             </tr>
             
             <!-- Footer -->
-            <tr>
-                <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
-                    <p style="margin: 0 0 10px 0; font-size: 14px;">
-                        Need help? Contact us at <a href="mailto:support@finstack.ng" style="color: #2F67FA;">support@finstackng</a>
-                    </p>
-                    <p style="margin: 0; font-size: 12px; color: #777;">
-                        © ${new Date().getFullYear()} Finstack. All rights reserved.
-                    </p>
-                </td>
-            </tr>
+          ${SUPPORT_FOOTER}
         </table>
     </body>
     </html>
@@ -147,16 +156,8 @@ const generateVerificationSuccessMail = (firstName) => {
         </tr>
         
         <!-- Footer -->
-        <tr>
-            <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
-                <p style="margin: 0 0 10px 0; font-size: 14px;">
-                    Questions? Contact us at <a href="mailto:support@Finstack.com" style="color: #2F67FA;">support@Finstack.com</a>
-                </p>
-                <p style="margin: 0; font-size: 12px; color: #777;">
-                    © ${new Date().getFullYear()} Finstack. All rights reserved.
-                </p>
-            </td>
-        </tr>
+      ${SUPPORT_FOOTER}
+
     </table>
 </body>
 </html>
@@ -210,9 +211,11 @@ const generateVerificationRequest = (firstName, verificationCode) => {
                     Or use this link:<br>
                     <a href="${
                       process.env.FRONTEND_URL
-                    }/verify-email/${verificationCode}" style="color: #2F67FA; word-break: break-all;">${
-    process.env.FRONTEND_URL
-  }/verify/${verificationCode}</a>
+                    }/verify-email/${verificationCode}" style="color: #2F67FA; word-break: break-all;">
+                    
+                    ${process.env.FRONTEND_URL}/verify-email/${verificationCode}
+
+                    </a>
                 </p>
                 
                 <p style="line-height: 1.6; margin: 0; color: #666; font-size: 12px;">
@@ -233,16 +236,8 @@ const generateVerificationRequest = (firstName, verificationCode) => {
         </tr>
         
         <!-- Footer -->
-        <tr>
-            <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
-                <p style="margin: 0 0 10px 0; font-size: 14px;">
-                    Need help? Contact <a href="mailto:support@Finstack.com" style="color: #2F67FA;">support@Finstack.com</a>
-                </p>
-                <p style="margin: 0; font-size: 12px; color: #777;">
-                    © ${new Date().getFullYear()} Finstack. All rights reserved.
-                </p>
-            </td>
-        </tr>
+      
+        ${SUPPORT_FOOTER}
     </table>
 </body>
 </html>
@@ -298,8 +293,8 @@ const forgotPasswordMail = (firstName, resetPasswordToken) => {
                     <a href="${
                       process.env.FRONTEND_URL
                     }/reset-password?token=${resetPasswordToken}" style="color: #2F67FA; word-break: break-all;">${
-    process.env.FRONTEND_URL
-  }/reset-password?token=${resetPasswordToken}</a>
+                      process.env.FRONTEND_URL
+                    }/reset-password?token=${resetPasswordToken}</a>
                 </p>
                 
                 <p style="line-height: 1.6; margin: 0; color: #666; font-size: 12px;">
@@ -320,16 +315,8 @@ const forgotPasswordMail = (firstName, resetPasswordToken) => {
         </tr>
         
         <!-- Footer -->
-        <tr>
-            <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
-                <p style="margin: 0 0 10px 0; font-size: 14px;">
-                    Need assistance? Contact <a href="mailto:support@Finstack.com" style="color: #2F67FA;">support@Finstack.com</a>
-                </p>
-                <p style="margin: 0; font-size: 12px; color: #777;">
-                    © ${new Date().getFullYear()} Finstack. All rights reserved.
-                </p>
-            </td>
-        </tr>
+            
+        ${SUPPORT_FOOTER}
     </table>
 </body>
 </html>
@@ -399,16 +386,7 @@ const generatePasswordResetMail = (firstName) => {
         </tr>
         
         <!-- Footer -->
-        <tr>
-            <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
-                <p style="margin: 0 0 10px 0; font-size: 14px;">
-                    Need help? Reach out at <a href="mailto:support@Finstack.com" style="color: #2F67FA;">support@Finstack.com</a>
-                </p>
-                <p style="margin: 0; font-size: 12px; color: #777;">
-                    © ${new Date().getFullYear()} Finstack. All rights reserved.
-                </p>
-            </td>
-        </tr>
+         ${SUPPORT_FOOTER}
     </table>
 </body>
 </html>
@@ -451,16 +429,7 @@ const generateAnnouncementMail = (title, body, firstName = "User") => {
                 </td>
             </tr>
             
-            <tr>
-                <td style="background-color: #ffffff; padding: 20px; text-align: center; border-top: 1px solid #eee;">
-                    <p style="margin: 0 0 10px 0; font-size: 14px;">
-                        Need help? Reach out at <a href="mailto:support@Finstack.com" style="color: #2F67FA;">support@Finstack.com</a>
-                    </p>
-                    <p style="margin: 0; font-size: 12px; color: #777;">
-                        © ${new Date().getFullYear()} Finstack. All rights reserved.
-                    </p>
-                </td>
-            </tr>
+             ${SUPPORT_FOOTER}
         </table>
     </body>
     </html>
@@ -471,9 +440,9 @@ const escapeHtml = (str = "") =>
   String(str).replace(
     /[&<>"']/g,
     (m) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
         m
-      ])
+      ],
   );
 
 const generateTradeAlertMail = ({
