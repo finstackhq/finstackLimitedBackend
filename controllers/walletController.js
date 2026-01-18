@@ -25,7 +25,7 @@ const getDashboardBalances = async (req, res) => {
     logger.error(
       `❌ Dashboard balances error for user ${req?.user?.id || "UNKNOWN"}: ${
         error.message
-      }`
+      }`,
     );
     // Return a generic 500 error to the user for security
     return res.status(500).json({
@@ -41,7 +41,7 @@ const getDashboardBalances = async (req, res) => {
 const getWallet = async (req, res) => {
   try {
     const wallets = await Wallet.find({ user_id: req.user.id }).select(
-      "currency accountName accountNumber walletAddress"
+      "currency accountName accountNumber bankName walletAddress",
     );
 
     return res.status(200).json({ success: true, wallets });
@@ -53,49 +53,6 @@ const getWallet = async (req, res) => {
   }
 };
 
-// DEPOSIT FUNCTIONS OLD
-// const getDepositAddress = async (req, res) => {
-//   try {
-//     const userId = req.user.id;
-//     const { currency } = req.query;
-
-//     if (!currency) {
-//       return res.status(400).json({ error: "Currency is required" });
-//     }
-
-//     // ✅ ALWAYS filter by currency
-//     const wallet = await Wallet.findOne({
-//       user_id: userId,
-//       currency,
-//       status: "ACTIVE",
-//     });
-
-//     if (!wallet) {
-//       return res.status(404).json({
-//         error: "Wallet not found for this currency",
-//       });
-//     }
-
-//     if (!wallet.walletAddress) {
-//       return res.status(400).json({
-//         error: "Deposit address not provisioned yet",
-//       });
-//     }
-
-//     return res.status(200).json({
-//       success: true,
-//       address: wallet.walletAddress,
-//       currency: wallet.currency,
-//       network: wallet.network || "BASE",
-//       provider: wallet.provider,
-//       message: "Send funds only on the specified network.",
-//     });
-
-//   } catch (error) {
-//     console.error("Get deposit address error:", error.message);
-//     res.status(500).json({ error: "Failed to retrieve deposit address" });
-//   }
-// };
 // DEPOSIT FUNCTIONS
 const getDepositAddress = async (req, res) => {
   try {
@@ -269,7 +226,7 @@ const submitPaycrestWithdrawal = async (req, res) => {
 
     if (!result.alreadyExists) {
       logger.info(
-        `Starting crypto transfer for Paycrest Order ID: ${result.paycrestOrderId}`
+        `Starting crypto transfer for Paycrest Order ID: ${result.paycrestOrderId}`,
       );
 
       cryptoTransferResult = await initiateCryptoTransfer({
@@ -291,7 +248,7 @@ const submitPaycrestWithdrawal = async (req, res) => {
               cryptoTransferResult.providerReference,
           },
         },
-        { new: true }
+        { new: true },
       ); // Get the updated document
     } // 6. Return Paycrest details to caller
 
@@ -353,7 +310,7 @@ const submitCryptoWithdrawal = async (req, res) => {
 
     if (new Decimal(wallet.balance).lt(totalDeduction)) {
       throw new Error(
-        `Insufficient balance. Need ${totalDeduction.toString()}`
+        `Insufficient balance. Need ${totalDeduction.toString()}`,
       );
     }
 
@@ -380,7 +337,7 @@ const submitCryptoWithdrawal = async (req, res) => {
           },
         },
       ],
-      { session }
+      { session },
     );
 
     // Since Transaction.create returns an array when using sessions, grab the first item
@@ -406,7 +363,7 @@ const submitCryptoWithdrawal = async (req, res) => {
         Number(requestAmt.toString()),
         walletCurrency,
         idempotencyKey,
-        txRecord.reference
+        txRecord.reference,
       );
 
       // Update status to what the provider says
@@ -427,7 +384,7 @@ const submitCryptoWithdrawal = async (req, res) => {
 
       await Wallet.updateOne(
         { _id: wallet._id },
-        { $inc: { balance: totalDeduction.toNumber() } }
+        { $inc: { balance: totalDeduction.toNumber() } },
       );
 
       await Transaction.findByIdAndUpdate(txRecord._id, {
@@ -435,7 +392,7 @@ const submitCryptoWithdrawal = async (req, res) => {
       });
 
       throw new Error(
-        "Provider service unavailable. Funds have been returned to your wallet."
+        "Provider service unavailable. Funds have been returned to your wallet.",
       );
     }
   } catch (error) {
