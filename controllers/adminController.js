@@ -129,7 +129,7 @@ const updateUserRole = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { role },
-      { new: true }
+      { new: true },
     );
     if (!updatedUser) {
       return res.status(404).json({ message: "User not found" });
@@ -158,7 +158,7 @@ const adminUpdateKycStatus = async (req, res) => {
   try {
     const kycRecord = await Kyc.findById(kycId).populate(
       "user_id",
-      "email firstName lastName"
+      "email firstName lastName",
     );
     if (!kycRecord) throw new Error("KYC record not found.");
 
@@ -183,22 +183,22 @@ const adminUpdateKycStatus = async (req, res) => {
             lastName: kycRecord.user_id.lastName,
             email: kycRecord.user_id.email,
             phoneNo: kycRecord.phone_number,
-          }
+          },
         );
 
         console.log(
           `[KYC] NGN Virtual Account for user ${kycRecord.user_id._id}:`,
-          ngnVirtualAccount
+          ngnVirtualAccount,
         );
 
         // If NGN VA creation failed, warn but continue
         if (ngnVirtualAccount.fromExisting) {
           console.log(
-            `[KYC] NGN Virtual Account already exists in DB for user ${kycRecord.user_id._id}`
+            `[KYC] NGN Virtual Account already exists in DB for user ${kycRecord.user_id._id}`,
           );
         } else {
           console.log(
-            `[KYC] NGN Virtual Account successfully created for user ${kycRecord.user_id._id}`
+            `[KYC] NGN Virtual Account successfully created for user ${kycRecord.user_id._id}`,
           );
         }
       }
@@ -231,13 +231,26 @@ const adminUpdateKycStatus = async (req, res) => {
         });
 
         // NGN Wallet (only if virtual account was created)
-        if (ngnVirtualAccount && !ngnVirtualAccount.fromExisting) {
+        // if (ngnVirtualAccount && !ngnVirtualAccount.fromExisting) {
+        //   await createWalletRecord({
+        //     userId: kycRecord.user_id._id,
+        //     currency: "NGN",
+        //     accountNumber: ngnVirtualAccount.accountNumber,
+        //     accountName: ngnVirtualAccount.accountName,
+        //     bankName: ngnVirtualAccount.bankName,
+        //     session,
+        //   });
+        // }
+
+        // NGN Wallet (always save/update if virtual account exists)
+        if (ngnVirtualAccount) {
           await createWalletRecord({
             userId: kycRecord.user_id._id,
             currency: "NGN",
             accountNumber: ngnVirtualAccount.accountNumber,
             accountName: ngnVirtualAccount.accountName,
             bankName: ngnVirtualAccount.bankName,
+            externalWalletId,
             session,
           });
         }
@@ -250,7 +263,7 @@ const adminUpdateKycStatus = async (req, res) => {
         await User.findByIdAndUpdate(
           kycRecord.user_id._id,
           { kycVerified: true },
-          { session }
+          { session },
         );
 
         await session.commitTransaction();
@@ -309,7 +322,7 @@ const getAllKycRecords = async (req, res) => {
   try {
     const kycRecords = await Kyc.find().populate(
       "user_id",
-      "email firstName lastName"
+      "email firstName lastName",
     );
     return res.status(200).json({
       message: "KYC records fetched successfully",
@@ -369,18 +382,18 @@ const getSingleKyc = async (req, res) => {
       if (searchByUserId === "true") {
         kycRecord = await Kyc.findOne({ user_id: id }).populate(
           "user_id",
-          "email firstName lastName"
+          "email firstName lastName",
         );
       } else {
         kycRecord = await Kyc.findById(id).populate(
           "user_id",
-          "email firstName lastName"
+          "email firstName lastName",
         );
       }
     } else {
       kycRecord = await Kyc.findOne({ user_id: req.user._id }).populate(
         "user_id",
-        "email firstName lastName"
+        "email firstName lastName",
       );
     }
 
@@ -451,18 +464,18 @@ const getPlatformVolume = async (req, res) => {
 
     const depositVolume = await getTotalTransactionVolume(
       "DEPOSIT",
-      supportedAssets
+      supportedAssets,
     );
     const withdrawVolume = await getTotalTransactionVolume(
       "WITHDRAW",
-      supportedAssets
+      supportedAssets,
     );
 
     // --- Apply FIX 2: Rounding for display precision ---
     const roundedDepositVolume = parseFloat(depositVolume.toFixed(8));
     const roundedWithdrawVolume = parseFloat(withdrawVolume.toFixed(8));
     const roundedTotalVolume = parseFloat(
-      (depositVolume + withdrawVolume).toFixed(8)
+      (depositVolume + withdrawVolume).toFixed(8),
     );
     // ----------------------------------------------------
 
