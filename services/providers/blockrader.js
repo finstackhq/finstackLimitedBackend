@@ -383,17 +383,40 @@ async function createVirtualAccountIfMissing(user, childAddressId, kycData) {
   }
 
   // 3️⃣ Ensure MongoDB has a wallet record (upsert safely)
+  // const update = {
+  //   $setOnInsert: {
+  //     user_id: user._id,
+  //     currency: "NGN",
+  //     externalWalletId: childAddressId,
+  //     account_number: virtualAccount.accountNumber,
+  //     account_name: virtualAccount.accountName,
+  //     bankName: virtualAccount.bankName,
+  //     balance: 0,
+  //     provider: "BLOCKRADAR",
+  //     status: "ACTIVE",
+  //   },
+  // };
+
+  // await Wallet.updateOne({ user_id: user._id, currency: "NGN" }, update, {
+  //   upsert: true,
+  //   timestamps: false,
+  // });
+
+  // ... inside createVirtualAccountIfMissing function ...
+
+  // 3️⃣ Ensure MongoDB has a wallet record (upsert safely)
   const update = {
     $setOnInsert: {
       user_id: user._id,
       currency: "NGN",
       externalWalletId: childAddressId,
-      account_number: virtualAccount.accountNumber,
-      account_name: virtualAccount.accountName,
+      accountNumber: virtualAccount.accountNumber, // ✅ CHANGED from account_number
+      accountName: virtualAccount.accountName, // ✅ CHANGED from account_name
       bankName: virtualAccount.bankName,
       balance: 0,
       provider: "BLOCKRADAR",
       status: "ACTIVE",
+      walletType: "USER", // ✅ ADDED to match your schema default
     },
   };
 
