@@ -21,7 +21,7 @@ const { redisClient } = require("./utilities/redis");
 const logger = require("./utilities/logger");
 const p2pService = require("./services/p2pService");
 
-const Sentry = require("@sentry/node");
+// const Sentry = require("@sentry/node");
 const app = express();
 
 // Request handler — must be first middleware
