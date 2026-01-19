@@ -27,3 +27,5 @@ Sentry.init({
     },
   },
 });
+
+module.exports = Sentry;

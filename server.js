@@ -1,5 +1,6 @@
 require("dotenv").config();
-require("./instrument");
+// require("./instrument");
+const Sentry = require("./instrument");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
