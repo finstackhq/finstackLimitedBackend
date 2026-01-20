@@ -4,7 +4,7 @@ const FeeConfig = require("../models/feeConfigModel");
 const Wallet = require("../models/walletModel");
 const { getWalletBalance } = require("../services/providers/blockrader");
 const { getFlatFee } = require("../services/adminFeeService");
-const p2pService = require("../services/p2pService"); // Ensure the path to your service file is correct
+const p2pService = require("../services/p2pService");
 
 // Create a new Merchant Ad
 const createMerchantAd = async (req, res) => {
@@ -24,9 +24,8 @@ const createMerchantAd = async (req, res) => {
     const asset = req.body.asset?.trim().toUpperCase();
     const fiat = req.body.fiat?.trim().toUpperCase();
 
-    const price = Number(req.body.price); // FIAT PRICE
+    const price = Number(req.body.price);
 
-    // Required fields
     if (
       !type ||
       !asset ||
@@ -47,14 +46,13 @@ const createMerchantAd = async (req, res) => {
       return res.status(400).json({ message: "Invalid price value." });
     }
 
-    // Enums
     const validTypes = ["BUY", "SELL"];
     const validCryptoAssets = ["USDC", "CNGN"];
     const validFiatCurrencies = ["NGN", "GHS", "XAF", "XOF", "RMB", "USD"];
 
     if (!validTypes.includes(type))
       return res.status(400).json({ message: "Invalid ad type." });
-    // if (!validCryptoAssets.includes(asset)) return res.status(400).json({ message: "Invalid crypto asset." });
+
     if (!validCryptoAssets.includes(asset)) {
       return res.status(400).json({ message: "Invalid crypto asset." });
     }
@@ -268,19 +266,6 @@ const updateMerchantAd = async (req, res) => {
           message: `Max limit (${effectiveMaxLimit}) exceeds available liquidity (${maxFiatFromLiquidity})`,
         });
       }
-
-      // 🔑 Recalculate crypto fee if liquidity changes
-      // const feeConfig = await FeeConfig.findOne({ currency: ad.asset });
-
-      // if (!feeConfig) {
-      //   return res.status(400).json({
-      //     message: `Platform fee not configured for ${ad.asset}`,
-      //   });
-      // }
-
-      // ad.platformFeeCrypto = Number(
-      //   (effectiveAvailable * feeConfig.feeAmount).toFixed(8)
-      // );
     }
 
     // Allowed updates
@@ -425,6 +410,50 @@ const deleteMerchantAd = async (req, res) => {
   }
 };
 
+// Trade Summary
+const getMerchantTradesSummary = async (req, res) => {
+  try {
+    const merchantId = req.user.id;
+
+    // 1️⃣ Fetch all ads of this merchant
+    const ads = await MerchantAd.find({ userId: merchantId });
+
+    const adIds = ads.map((ad) => ad._id);
+
+    // 2️⃣ Fetch total trades
+    const totalTrades = await p2pService.countTrades({ merchantId });
+
+    // 3️⃣ Fetch total completed trades
+    const totalCompleted = await p2pService.countTrades({
+      merchantId,
+      status: "COMPLETED",
+    });
+
+    // 4️⃣ Fetch active offers on listed ads
+    const activeOffers = await p2pService.countTrades({
+      adId: { $in: adIds },
+      status: "ACTIVE",
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Merchant trades summary fetched successfully",
+      data: {
+        totalAds: ads.length,
+        totalTrades,
+        totalCompleted,
+        activeOffers,
+      },
+    });
+  } catch (error) {
+    logger.error("Error fetching merchant trades summary:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
 module.exports = {
   createMerchantAd,
   getAllAds,
@@ -433,4 +462,5 @@ module.exports = {
   deactivateAd,
   getMerchantOrders,
   deleteMerchantAd,
+  getMerchantTradesSummary,
 };

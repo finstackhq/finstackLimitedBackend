@@ -76,7 +76,7 @@ async function resolveUserWalletId(userId, currency) {
   if (!wallet || !wallet.externalWalletId) {
     throw new TradeError(
       `Wallet not found or missing provider ID for user ${userId} and currency ${currency}.`,
-      404
+      404,
     );
   }
   return wallet.externalWalletId;
@@ -99,7 +99,7 @@ async function resolveUserCryptoAddress(userId, currency) {
   if (!wallet || !wallet.walletAddress) {
     throw new TradeError(
       `Missing destination crypto address for user ${userId} and target currency ${currency}.`,
-      400
+      400,
     );
   }
   return wallet.walletAddress;
@@ -171,12 +171,12 @@ module.exports = {
 
     for (const w of wallets) {
       logger.info(
-        `Fetching balance for wallet: ${w.currency} / ID: ${w.externalWalletId}`
+        `Fetching balance for wallet: ${w.currency} / ID: ${w.externalWalletId}`,
       );
       try {
         const bal = await blockrader.getWalletBalance(
           w.externalWalletId,
-          w.currency
+          w.currency,
         );
         logger.info(`Successfully fetched balance for ${w.currency}.`);
         results.push({
@@ -191,7 +191,7 @@ module.exports = {
         });
       } catch (err) {
         logger.error(
-          `❌ Blockrader balance fetch failed for ${w.currency}: ${err.message}`
+          `❌ Blockrader balance fetch failed for ${w.currency}: ${err.message}`,
         );
         results.push({
           currency: w.currency,
@@ -203,6 +203,11 @@ module.exports = {
     // 3. Save into Redis cache
     await setCache(cacheKey, results, CACHE_TTL);
     return results;
+  },
+
+  // countTrades here
+  async countTrades(filter = {}) {
+    return await P2PTrade.countDocuments(filter);
   },
 
   // SECURE MERCHANT ASSET BEFORE FIAT IS SENT WHEN MERCHANT IS BUYING CRYPTO
@@ -266,7 +271,7 @@ module.exports = {
 
       if (!primaryBank) {
         throw new TradeError(
-          "Please add and set a primary bank account in settings before selling."
+          "Please add and set a primary bank account in settings before selling.",
         );
       }
 
@@ -299,7 +304,7 @@ module.exports = {
       const adUpdateResult = await MerchantAd.findOneAndUpdate(
         { _id: merchantAd._id, availableAmount: { $gte: cryptoAmount } },
         { $inc: { availableAmount: -cryptoAmount } },
-        { new: true, session }
+        { new: true, session },
       );
       if (!adUpdateResult)
         throw new TradeError("Insufficient liquidity or merchant ad not found");
@@ -312,7 +317,7 @@ module.exports = {
         const escrowSourceUserId = buyerId; // Buyer owns crypto
         const sourceWalletId = await resolveUserWalletId(
           escrowSourceUserId,
-          currencyTarget
+          currencyTarget,
         );
         const escrowAmount = cryptoAmount;
 
@@ -321,7 +326,7 @@ module.exports = {
           blockrader.ESCROW_DESTINATION_ADDRESS,
           escrowAmount,
           currencyTarget,
-          `${reference}-ESCROW`
+          `${reference}-ESCROW`,
         );
 
         if (!transferResult)
@@ -362,7 +367,7 @@ module.exports = {
             paymentDetails: paymentSnapshot,
           },
         ],
-        { session }
+        { session },
       );
 
       trade = tradeDoc[0];
@@ -415,7 +420,7 @@ module.exports = {
     if (!validStatuses.includes(trade.status)) {
       throw new TradeError(
         `Cannot confirm payment in status: ${trade.status}`,
-        409
+        409,
       );
     }
 
@@ -431,7 +436,7 @@ module.exports = {
 
     const sourceWalletId = await resolveUserWalletId(
       escrowSourceUserId,
-      trade.currencyTarget
+      trade.currencyTarget,
     );
 
     // Escrow FULL GROSS amount (fees are handled at settlement)
@@ -448,7 +453,7 @@ module.exports = {
         blockrader.ESCROW_DESTINATION_ADDRESS, // 2. toCryptoAddress (The 0x... address)
         escrowAmount, // 3. amount
         trade.currencyTarget, // 4. currency (e.g., "USDC")
-        `${trade.reference}-ESCROW` // 5. idempotencyKey
+        `${trade.reference}-ESCROW`, // 5. idempotencyKey
       );
 
       if (!transferResult) {
@@ -478,7 +483,7 @@ module.exports = {
             ip,
           },
           trade.status,
-          session
+          session,
         );
 
         // 🔑 ADD THIS BLOCK (ESCROW LEDGER)
@@ -487,7 +492,7 @@ module.exports = {
             idempotencyKey: `P2P:${trade._id}:ESCROW`,
             walletId: await resolveWalletObjectId(
               escrowSourceUserId,
-              trade.currencyTarget
+              trade.currencyTarget,
             ),
             userId: escrowSourceUserId,
             type: "P2P_ESCROW",
@@ -497,7 +502,7 @@ module.exports = {
             reference: trade.reference,
             metadata: { p2pTradeId: trade._id },
           },
-          session
+          session,
         );
 
         await session.commitTransaction();
@@ -521,12 +526,12 @@ module.exports = {
 
         // 🔥 IMPORTANT: Provider succeeded but DB failed
         console.error(
-          `CRITICAL: Escrow sent but DB update failed. EscrowTx=${escrowTxId}, Trade=${trade.reference}`
+          `CRITICAL: Escrow sent but DB update failed. EscrowTx=${escrowTxId}, Trade=${trade.reference}`,
         );
 
         throw new TradeError(
           "Payment confirmed but database update failed. Manual reconciliation required.",
-          500
+          500,
         );
       } finally {
         session.endSession();
@@ -560,14 +565,14 @@ module.exports = {
     if (trade.side !== "SELL") {
       throw new TradeError(
         "Merchant payment confirmation is only allowed when merchant is buying crypto",
-        409
+        409,
       );
     }
 
     if (trade.status !== ALLOWED_STATES.INIT) {
       throw new TradeError(
         `Cannot mark payment sent in status: ${trade.status}`,
-        409
+        409,
       );
     }
 
@@ -581,7 +586,7 @@ module.exports = {
         role: "merchant",
         ip,
       },
-      trade.status
+      trade.status,
     );
 
     // 2. 🔔 ADD THIS: Notify the User (Buyer) that the Merchant has sent the money
@@ -602,7 +607,7 @@ module.exports = {
     if (requesterId.toString() !== sellerId.toString()) {
       throw new TradeError(
         "Unauthorized: Only the seller can release crypto.",
-        403
+        403,
       );
     }
 
@@ -615,7 +620,7 @@ module.exports = {
     if (!validStatuses.includes(trade.status)) {
       throw new TradeError(
         `Cannot release. Trade is in status: ${trade.status}.`,
-        409
+        409,
       );
     }
 
@@ -689,7 +694,7 @@ module.exports = {
     const otpValid = await verifyOtp(
       sellerId.toString(),
       "P2P_SETTLEMENT",
-      otpCode
+      otpCode,
     );
 
     if (!otpValid) {
@@ -760,7 +765,7 @@ module.exports = {
                 idempotencyKey: releaseKey,
               },
             ],
-            { session }
+            { session },
           );
         }
 
@@ -801,7 +806,7 @@ module.exports = {
                   idempotencyKey: feePlatformKey,
                 },
               ],
-              { session }
+              { session },
             );
           }
         }
@@ -847,7 +852,7 @@ module.exports = {
       if (!isExpired) {
         throw new TradeError(
           "Merchant cannot cancel while trade is active. Wait for expiration or open a dispute.",
-          403
+          403,
         );
       }
     } else if (!isBuyer && !isAdmin) {
@@ -866,7 +871,7 @@ module.exports = {
     if (terminalStates.includes(trade.status)) {
       throw new TradeError(
         `Trade is already in a final state: ${trade.status}`,
-        409
+        409,
       );
     }
 
@@ -890,11 +895,11 @@ module.exports = {
 
         const destinationWalletId = await resolveUserWalletId(
           refundRecipientId,
-          sourceCurrency
+          sourceCurrency,
         );
         const destinationAddress = await resolveUserCryptoAddress(
           refundRecipientId,
-          sourceCurrency
+          sourceCurrency,
         );
 
         const transferResult = await blockrader.transferFunds(
@@ -903,7 +908,7 @@ module.exports = {
           refundAmount,
           sourceCurrency,
           destinationAddress,
-          `${trade.reference}-REVERSAL`
+          `${trade.reference}-REVERSAL`,
         );
 
         if (!transferResult)
@@ -922,7 +927,7 @@ module.exports = {
         await MerchantAd.findByIdAndUpdate(
           trade.merchantAdId,
           { $inc: { availableAmount: trade.amountCrypto } },
-          { session }
+          { session },
         );
 
         const newStatus = requiresEscrowReversal
@@ -941,7 +946,7 @@ module.exports = {
             ip,
           },
           trade.status,
-          session
+          session,
         );
 
         // 🔑 ADD: REFUND LEDGER
@@ -951,7 +956,7 @@ module.exports = {
               idempotencyKey: `P2P:${trade._id}:REFUND`,
               walletId: await resolveWalletObjectId(
                 refundRecipientId,
-                trade.currencyTarget
+                trade.currencyTarget,
               ),
               userId: refundRecipientId,
               type: "P2P_REFUND",
@@ -961,7 +966,7 @@ module.exports = {
               reference: trade.reference,
               metadata: { p2pTradeId: trade._id },
             },
-            session
+            session,
           );
         }
 
@@ -975,7 +980,7 @@ module.exports = {
       } catch (dbError) {
         await session.abortTransaction();
         console.error(
-          `DATABASE CRASH after reversal sent: ${reversalTxId}. Manual sync may be required for trade ${trade.reference}`
+          `DATABASE CRASH after reversal sent: ${reversalTxId}. Manual sync may be required for trade ${trade.reference}`,
         );
         throw dbError;
       } finally {
@@ -1013,7 +1018,7 @@ module.exports = {
             "Buyer did not confirm payment in time. Dispute opened automatically.",
           role: "system",
         },
-        ALLOWED_STATES.MERCHANT_PAID
+        ALLOWED_STATES.MERCHANT_PAID,
       );
     }
 
@@ -1040,7 +1045,7 @@ module.exports = {
         reference,
         trade.merchantId,
         "ADMIN_OVERRIDE",
-        ip
+        ip,
       );
 
       setImmediate(() => {

@@ -11,6 +11,7 @@ const {
   updateMerchantAd,
   getMerchantOrders,
   deleteMerchantAd,
+  getMerchantTradesSummary,
 } = require("../controllers/merchantController");
 
 //  PUBLIC ROUTES
@@ -23,7 +24,7 @@ router.patch(
   verifyToken,
   walletLimiter,
   merchantOnly,
-  updateMerchantAd
+  updateMerchantAd,
 );
 router.get("/my-ads", verifyToken, walletLimiter, merchantOnly, getMerchantAds); // Get merchant’s ads
 router.patch(
@@ -31,7 +32,7 @@ router.patch(
   verifyToken,
   walletLimiter,
   merchantOnly,
-  deactivateAd
+  deactivateAd,
 ); // Deactivate ad
 
 //  ADMIN OR MERCHANT ROUTES
@@ -40,7 +41,7 @@ router.get(
   verifyToken,
   walletLimiter,
   allowRoles("admin", "merchant"),
-  getMerchantAds
+  getMerchantAds,
 );
 
 router.get(
@@ -48,7 +49,7 @@ router.get(
   verifyToken,
   walletLimiter,
   merchantOnly,
-  getMerchantOrders
+  getMerchantOrders,
 );
 
 // Delete ad
@@ -57,7 +58,14 @@ router.delete(
   verifyToken,
   walletLimiter,
   merchantOnly,
-  deleteMerchantAd
+  deleteMerchantAd,
+);
+
+router.get(
+  "/trades-summary",
+  verifyToken,
+  walletLimiter,
+  getMerchantTradesSummary,
 );
 
 module.exports = router;
