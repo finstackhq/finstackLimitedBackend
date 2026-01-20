@@ -49,18 +49,103 @@ const createAnnouncementAndSendMail = async (req, res) => {
   });
 };
 /* ===========  ADMIN: Get All Users   =========== */
+
 const getAllUsers = async (req, res) => {
   try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin access required",
+      });
+    }
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const users = await User.find()
-      .select("name email phone role createdAt")
-      .skip(skip)
-      .limit(limit);
+    const matchStage = {};
+    if (req.query.role) matchStage.role = req.query.role;
+    if (req.query.isVerified)
+      matchStage.isVerified = req.query.isVerified === "true";
 
-    const totalUsers = await User.countDocuments();
+    const users = await User.aggregate([
+      { $match: matchStage },
+
+      /* -------------------- KYC JOIN -------------------- */
+      {
+        $lookup: {
+          from: "kycs",
+          localField: "_id",
+          foreignField: "user_id",
+          as: "kyc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$kyc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      /* -------------------- WALLET JOIN -------------------- */
+      {
+        $lookup: {
+          from: "wallets",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$user_id", "$$userId"] },
+                    { $eq: ["$walletType", "USER"] },
+                    { $eq: ["$currency", "NGN"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                balance: 1,
+                currency: 1,
+                status: 1,
+              },
+            },
+          ],
+          as: "wallet",
+        },
+      },
+      {
+        $unwind: {
+          path: "$wallet",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      /* -------------------- RESPONSE SHAPE -------------------- */
+      {
+        $project: {
+          email: 1,
+          role: 1,
+          createdAt: 1,
+          isVerified: 1,
+          kycVerified: 1,
+
+          country: "$kyc.country",
+          kycStatus: "$kyc.status",
+
+          balance: { $ifNull: ["$wallet.balance", 0] },
+          walletStatus: { $ifNull: ["$wallet.status", "NOT_CREATED"] },
+          currency: { $ifNull: ["$wallet.currency", "NGN"] },
+        },
+      },
+
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]);
+
+    const totalUsers = await User.countDocuments(matchStage);
 
     res.status(200).json({
       success: true,
@@ -71,13 +156,14 @@ const getAllUsers = async (req, res) => {
       users,
     });
   } catch (error) {
-    console.error("❌ Error fetching users:", error);
+    console.error("Admin get users error:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
     });
   }
 };
+
 /* =========== ADMIN: Get All Merchants =========== */
 const getAllMerchants = async (req, res) => {
   try {

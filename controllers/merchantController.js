@@ -81,7 +81,7 @@ const createMerchantAd = async (req, res) => {
 
       const balanceData = await getWalletBalance(
         merchantWallet.externalWalletId,
-        asset
+        asset,
       );
 
       if (balanceData.available < availableAmount) {
@@ -212,6 +212,7 @@ const getMerchantAds = async (req, res) => {
     });
   }
 };
+
 //Update an Ad
 const updateMerchantAd = async (req, res) => {
   try {
@@ -300,7 +301,7 @@ const updateMerchantAd = async (req, res) => {
       if (updateFields[key] !== undefined) {
         if (
           ["minLimit", "maxLimit", "timeLimit", "availableAmount"].includes(
-            key
+            key,
           ) &&
           isNaN(updateFields[key])
         ) {
@@ -338,7 +339,7 @@ const deactivateAd = async (req, res) => {
     const ad = await MerchantAd.findOneAndUpdate(
       { _id: id, userId, status: "ACTIVE" },
       { $set: { status: "INACTIVE" } },
-      { new: true } // Returns the updated document
+      { new: true }, // Returns the updated document
     );
 
     if (!ad) {

@@ -1,59 +1,181 @@
 const UserBankAccount = require("../models/userBankAccountModel");
 const User = require("../models/userModel");
+const Kyc = require("../models/kycModel");
+const Wallet = require("../models/walletModel");
+
+// const getAllUsers = async (req, res) => {
+//   try {
+//     // 1. Admin Authorization Guard
+//     if (req.user.role !== "admin") {
+//       return res
+//         .status(403)
+//         .json({ success: false, message: "Admin access required" });
+//     }
+
+//     // 2. Pagination Logic
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 20;
+//     const skip = (page - 1) * limit;
+
+//     // 3. Search/Filter (Optional but useful)
+//     const { role, isVerified } = req.query;
+//     const filter = {};
+//     if (role) filter.role = role;
+//     if (isVerified) filter.isVerified = isVerified === "true";
+
+//     // 4. Parallel Execution for Speed
+//     const [users, total] = await Promise.all([
+//       User.find(filter)
+//         .select("-password -refreshToken -verificationCode -resetPasswordToken") // 🛡️ Security: Exclude sensitive fields
+//         .sort({ createdAt: -1 })
+//         .skip(skip)
+//         .limit(limit)
+//         .lean(),
+//       User.countDocuments(filter),
+//     ]);
+
+//     res.status(200).json({
+//       success: true,
+//       data: users,
+//       pagination: {
+//         totalUsers: total,
+//         currentPage: page,
+//         totalPages: Math.ceil(total / limit),
+//         pageSize: limit,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error fetching users:", error);
+//     res.status(500).json({ success: false, message: "Internal server error" });
+//   }
+// };
+
+// Get current logged-in user's details
 
 const getAllUsers = async (req, res) => {
   try {
-    // 1. Admin Authorization Guard
     if (req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ success: false, message: "Admin access required" });
+      return res.status(403).json({
+        success: false,
+        message: "Admin access required",
+      });
     }
 
-    // 2. Pagination Logic
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    // 3. Search/Filter (Optional but useful)
-    const { role, isVerified } = req.query;
-    const filter = {};
-    if (role) filter.role = role;
-    if (isVerified) filter.isVerified = isVerified === "true";
+    const matchStage = {};
+    if (req.query.role) matchStage.role = req.query.role;
+    if (req.query.isVerified)
+      matchStage.isVerified = req.query.isVerified === "true";
 
-    // 4. Parallel Execution for Speed
-    const [users, total] = await Promise.all([
-      User.find(filter)
-        .select("-password -refreshToken -verificationCode -resetPasswordToken") // 🛡️ Security: Exclude sensitive fields
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      User.countDocuments(filter),
+    const users = await User.aggregate([
+      { $match: matchStage },
+
+      /* -------------------- KYC JOIN -------------------- */
+      {
+        $lookup: {
+          from: "kycs",
+          localField: "_id",
+          foreignField: "user_id",
+          as: "kyc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$kyc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      /* -------------------- WALLET JOIN -------------------- */
+      {
+        $lookup: {
+          from: "wallets",
+          let: { userId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$user_id", "$$userId"] },
+                    { $eq: ["$walletType", "USER"] },
+                    { $eq: ["$currency", "NGN"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                balance: 1,
+                currency: 1,
+                status: 1,
+              },
+            },
+          ],
+          as: "wallet",
+        },
+      },
+      {
+        $unwind: {
+          path: "$wallet",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      /* -------------------- RESPONSE SHAPE -------------------- */
+      {
+        $project: {
+          password: 0,
+          refreshToken: 0,
+          verificationCode: 0,
+          resetPasswordToken: 0,
+
+          email: 1,
+          role: 1,
+          createdAt: 1,
+          isVerified: 1,
+          kycVerified: 1,
+
+          country: "$kyc.country",
+          kycStatus: "$kyc.status",
+
+          balance: { $ifNull: ["$wallet.balance", 0] },
+          walletStatus: "$wallet.status",
+          currency: "$wallet.currency",
+        },
+      },
+
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
     ]);
+
+    const totalUsers = await User.countDocuments(matchStage);
 
     res.status(200).json({
       success: true,
-      data: users,
-      pagination: {
-        totalUsers: total,
-        currentPage: page,
-        totalPages: Math.ceil(total / limit),
-        pageSize: limit,
-      },
+      message: "Users fetched successfully",
+      page,
+      totalPages: Math.ceil(totalUsers / limit),
+      totalUsers,
+      users,
     });
   } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error("Admin get users error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   }
 };
 
-// Get current logged-in user's details
 const getMe = async (req, res) => {
   try {
     // req.user.id comes from your verifyToken middleware
     const user = await User.findById(req.user.id).select(
-      "-password -refreshToken"
+      "-password -refreshToken",
     );
 
     if (!user) {
@@ -87,7 +209,7 @@ const updateMe = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     ).select("-password -refreshToken");
 
     if (!updatedUser) {
