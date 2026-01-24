@@ -231,6 +231,7 @@
 // }
 
 // module.exports = { handleDepositConfirmed, handleWithdrawSuccess };
+
 const mongoose = require("mongoose");
 const Wallet = require("../models/walletModel");
 const Transaction = require("../models/transactionModel");
@@ -254,14 +255,17 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     wallet: blockradarWallet,
   } = data;
 
-  // Validation now checks the correct object path
+  // Validation
   if (!externalTxId || !amountPaid || !reference) {
     console.warn("⚠️ Invalid Blockradar deposit payload", data);
     return null;
   }
 
-  const normalizedCurrency =
-    currency === "USD" ? "USDC" : currency.toUpperCase();
+  // --- CURRENCY NORMALIZATION ---
+  let normalizedCurrency = currency.toUpperCase();
+  if (normalizedCurrency === "USD") normalizedCurrency = "USDC";
+  // Explicitly ensuring CNGN remains CNGN (matches your DB)
+  if (normalizedCurrency === "CNGN") normalizedCurrency = "CNGN";
 
   // 🔐 Idempotency check
   const alreadyProcessed = await Transaction.findOne({
@@ -280,6 +284,7 @@ async function handleDepositConfirmed(webhookPayload = {}) {
   try {
     let wallet = null;
 
+    // --- WALLET LOOKUP ---
     if (blockradarWallet?.id) {
       wallet = await Wallet.findOne({
         externalWalletId: blockradarWallet.id,
@@ -298,7 +303,7 @@ async function handleDepositConfirmed(webhookPayload = {}) {
 
     if (!wallet) {
       throw new Error(
-        `Wallet not found for Blockradar deposit | extTx=${externalTxId}`,
+        `Wallet not found for Blockradar deposit | extTx=${externalTxId} | Currency=${normalizedCurrency}`,
       );
     }
 
@@ -376,7 +381,7 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     );
     return tx;
   } catch (err) {
-    await session.abortTransaction();
+    if (session.inAtomicity()) await session.abortTransaction();
     session.endSession();
     console.error("❌ Deposit failed:", err.message);
     throw err;
@@ -384,7 +389,6 @@ async function handleDepositConfirmed(webhookPayload = {}) {
 }
 
 async function handleWithdrawSuccess(eventData = {}) {
-  // standardized extraction for withdrawal too
   const data = eventData.data || eventData.payload || eventData;
   const { reference } = data;
 
@@ -423,7 +427,6 @@ async function handleWithdrawSuccess(eventData = {}) {
   };
 
   if (data.gasFee) {
-    // Using gasFee from the Blockradar log
     const networkFee = Number(data.gasFee);
     tx.feeDetails.networkFee = networkFee;
 
