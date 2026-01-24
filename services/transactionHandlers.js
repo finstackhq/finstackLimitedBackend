@@ -5,92 +5,75 @@ const FeeLog = require("../models/feeLogModel");
 const Decimal = require("decimal.js");
 const { getFlatFee } = require("./adminFeeService");
 
-
 async function handleDepositConfirmed(webhookPayload = {}) {
-  if (webhookPayload.event !== "deposit.success") {
-    return null;
-  }
+  if (webhookPayload.event !== "deposit.success") return null;
 
-  const data = webhookPayload.data || {};
+  const data = webhookPayload.payload || {};
+
   const {
+    id: externalTxId,
     amountPaid,
     currency = "USDC",
     senderAddress,
     recipientAddress,
     reference,
-    metadata,
+    wallet: blockradarWallet,
   } = data;
 
-  // -------------------------------
-  // 1. Validate payload
-  // -------------------------------
- if (!amountPaid || !reference) {
-  console.warn("⚠️ Invalid Blockradar deposit payload", data);
-  return null;
-}
+  if (!externalTxId || !amountPaid || !reference) {
+    console.warn("⚠️ Invalid Blockradar deposit payload", data);
+    return null;
+  }
 
-  const userId = metadata.user_id;
-
-  // Normalize currency (important)
   const normalizedCurrency =
     currency === "USD" ? "USDC" : currency.toUpperCase();
 
-  // -------------------------------
-  // 2. Idempotency check (OUTSIDE transaction)
-  // -------------------------------
+  // 🔐 STRONG idempotency (Blockradar retries safe)
+  const alreadyProcessed = await Transaction.findOne({
+    externalTxId,
+    source: "BLOCKRADAR",
+  });
 
-  const existingTx = await Transaction.findOne({
-  reference,
-  source: "BLOCKRADAR",
-});
-
-  if (existingTx) {
-    console.info(`🔁 Duplicate deposit ignored: ${reference}`);
-    return existingTx;
+  if (alreadyProcessed) {
+    console.info(`🔁 Deposit already processed: ${externalTxId}`);
+    return alreadyProcessed;
   }
 
-  // -------------------------------
-  // 3. Start MongoDB session
-  // -------------------------------
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // -------------------------------
-    // 4. Resolve wallet
-    // -------------------------------
-   
-
     let wallet = null;
 
-// Preferred: Blockradar wallet ID
-if (data.externalWalletId) {
-  wallet = await Wallet.findOne({
-    externalWalletId: data.externalWalletId,
-    currency: normalizedCurrency,
-    status: "ACTIVE",
-  }).session(session);
-}
+    // if (data.externalWalletId) {
+    //   wallet = await Wallet.findOne({
+    //     externalWalletId: data.externalWalletId,
+    //     currency: normalizedCurrency,
+    //     status: "ACTIVE",
+    //   }).session(session);
+    // }
+    if (blockradarWallet?.id) {
+      wallet = await Wallet.findOne({
+        externalWalletId: blockradarWallet.id,
+        currency: normalizedCurrency,
+        status: "ACTIVE",
+      }).session(session);
+    }
 
-// Fallback: recipient address
-if (!wallet && recipientAddress) {
-  wallet = await Wallet.findOne({
-    walletAddress: recipientAddress,
-    currency: normalizedCurrency,
-    status: "ACTIVE",
-  }).session(session);
-}
+    if (!wallet && blockradarWallet?.address) {
+      wallet = await Wallet.findOne({
+        walletAddress: blockradarWallet.address,
+        currency: normalizedCurrency,
+        status: "ACTIVE",
+      }).session(session);
+    }
 
-if (!wallet) {
-  throw new Error(
-    `Wallet not found for Blockradar deposit | extWalletId=${data.externalWalletId}`
-  );
-}
+    if (!wallet) {
+      throw new Error(
+        `Wallet not found for Blockradar deposit | extTx=${externalTxId}`,
+      );
+    }
 
-
-    // -------------------------------
-    // 5. Amount & fee calculation
-    // -------------------------------
     const grossAmount = new Decimal(amountPaid);
     if (grossAmount.lte(0)) {
       throw new Error("Invalid deposit amount");
@@ -100,60 +83,54 @@ if (!wallet) {
     const feeAmount = new Decimal(flatFeeValue || 0);
 
     if (feeAmount.gt(grossAmount)) {
-      throw new Error("Deposit fee exceeds deposit amount");
+      throw new Error("Deposit fee exceeds amount");
     }
 
     const netAmount = grossAmount.minus(feeAmount);
 
-    // -------------------------------
-    // 6. Credit wallet (atomic)
-    // -------------------------------
+    // 💰 Credit wallet
     await Wallet.updateOne(
       { _id: wallet._id },
       { $inc: { balance: Number(netAmount) } },
-      { session }
+      { session },
     );
 
-    // -------------------------------
-    // 7. Create transaction record
-    // -------------------------------
-    const tx = await Transaction.create(
+    // 🧾 Create transaction (externalTxId is the lock)
+    const [tx] = await Transaction.create(
       [
         {
           walletId: wallet._id,
           userId: wallet.user_id,
+          externalTxId,
+          reference,
           type: "DEPOSIT",
+          source: "BLOCKRADAR",
           amount: Number(grossAmount),
           netAmount: Number(netAmount),
           currency: normalizedCurrency,
           status: "COMPLETED",
-          reference,
-          source: "BLOCKRADAR",
           metadata: {
             senderAddress,
             recipientAddress,
             rawWebhook: data,
           },
           feeDetails: {
-            totalFee: Number(feeAmount),
             platformFee: Number(feeAmount),
+            totalFee: Number(feeAmount),
             networkFee: 0,
             isDeductedFromAmount: true,
           },
         },
       ],
-      { session }
+      { session },
     );
 
-    // -------------------------------
-    // 8. Fee accounting log
-    // -------------------------------
     if (feeAmount.gt(0)) {
       await FeeLog.create(
         [
           {
             userId: wallet.user_id,
-            transactionId: tx[0]._id,
+            transactionId: tx._id,
             type: "DEPOSIT",
             currency: normalizedCurrency,
             grossAmount: Number(grossAmount),
@@ -163,85 +140,154 @@ if (!wallet) {
             provider: "BLOCKRADAR",
           },
         ],
-        { session }
+        { session },
       );
     }
 
-    // -------------------------------
-    // 9. Commit transaction
-    // -------------------------------
     await session.commitTransaction();
     session.endSession();
 
     console.info(
-      `✅ Deposit credited | User: ${userId} | Amount: ${netAmount.toString()} ${normalizedCurrency}`
+      `✅ Deposit credited | ${netAmount.toString()} ${normalizedCurrency}`,
     );
 
-    return tx[0];
-  } catch (error) {
-    // ❌ Rollback everything
+    return tx;
+  } catch (err) {
     await session.abortTransaction();
     session.endSession();
-
-    console.error("❌ Deposit transaction failed:", error.message);
-    throw error;
+    console.error("❌ Deposit failed:", err.message);
+    throw err;
   }
 }
 
+// async function handleWithdrawSuccess(eventData = {}) {
+//   const { reference } = eventData;
+//   if (!reference) return null;
 
+//   const tx = await Transaction.findOne({ reference });
+//   if (!tx) {
+//     console.warn("Withdrawal success for unknown reference:", reference);
+//     return null;
+//   }
+
+//   // 🔐 Idempotency guard
+//   if (tx.status === "COMPLETED") {
+//     console.info(`🔁 Withdrawal already completed: ${reference}`);
+//     return tx;
+//   }
+
+//   const flatFeeValue = await getFlatFee("WITHDRAWAL", tx.currency);
+//   const flatFeeDecimal = new Decimal(flatFeeValue || 0);
+
+//   const grossAmt = new Decimal(tx.amount || 0);
+//   const netAmt = grossAmt.minus(flatFeeDecimal);
+
+//   tx.status = "COMPLETED";
+//   tx.metadata = { ...tx.metadata, providerData: eventData };
+
+//   tx.feeDetails = {
+//     ...tx.feeDetails,
+//     platformFee: Number(flatFeeDecimal),
+//     totalFee: Number(flatFeeDecimal),
+//     netAmountReceived: Number(netAmt),
+//     isDeductedFromAmount: true,
+//   };
+
+//   if (eventData.providerNetworkFee) {
+//     const networkFee = Number(eventData.providerNetworkFee);
+//     tx.feeDetails.networkFee = networkFee;
+
+//     await FeeLog.findOneAndUpdate(
+//       { transactionId: tx._id },
+//       {
+//         $setOnInsert: {
+//           transactionId: tx._id,
+//           type: "WITHDRAWAL",
+//           currency: tx.currency,
+//           provider: "BLOCKRADAR",
+//         },
+//         $set: {
+//           platformFee: Number(flatFeeDecimal),
+//           networkFee,
+//           feeAmount: Number(flatFeeDecimal.add(networkFee)),
+//           grossAmount: Number(grossAmt),
+//         },
+//       },
+//       { upsert: true },
+//     );
+//   }
+
+//   await tx.save();
+//   return tx;
+// }
 async function handleWithdrawSuccess(eventData = {}) {
-    const reference = eventData.reference;
-    
-    // 1. Find the transaction that was created in submitCryptoWithdrawal
-    const tx = await Transaction.findOne({ reference });
-    if (!tx) {
-        console.warn("Withdrawal success for unknown reference:", reference);
-        return null;
-    }
+  // Blockradar sends 'reference' inside payload
+  const data = eventData.payload || eventData;
+  const { reference } = data;
 
-    // 2. Fetch the flat fee that the admin set in the DB
-    const flatFeeValue = await getFlatFee("WITHDRAWAL", tx.currency);
-    const flatFeeDecimal = new Decimal(flatFeeValue);
+  if (!reference) {
+    console.warn(
+      "Withdrawal success called with missing reference:",
+      eventData,
+    );
+    return null;
+  }
 
-    // 3. Mark transaction completed
-    tx.status = "COMPLETED";
-    tx.metadata = { ...tx.metadata, providerData: eventData };
+  const tx = await Transaction.findOne({ reference });
+  if (!tx) {
+    console.warn("Withdrawal success for unknown reference:", reference);
+    return null;
+  }
 
-    // 4. Calculate Net Amount (Gross - Platform Fee)
-    const grossAmt = new Decimal(tx.amount || 0);
-    const netAmt = grossAmt.sub(flatFeeDecimal);
-
-    // 5. Update Fee Details
-    tx.feeDetails = {
-        ...tx.feeDetails,
-        platformFee: Number(flatFeeDecimal.toString()),
-        totalFee: Number(flatFeeDecimal.toString()),
-        netAmountReceived: Number(netAmt.toString()), // This is what actually hit their external wallet
-        isDeductedFromAmount: true
-    };
-
-    // 6. Handle Network Fees (The gas cost Blockradar paid)
-    if (eventData.providerNetworkFee) {
-        const networkFee = Number(eventData.providerNetworkFee);
-        tx.feeDetails.networkFee = networkFee;
-
-        // Log the final fees for your business accounting
-        await FeeLog.findOneAndUpdate(
-            { transactionId: tx._id },
-            { 
-                $set: { 
-                    platformFee: Number(flatFeeDecimal.toString()),
-                    networkFee: networkFee,
-                    feeAmount: Number(flatFeeDecimal.add(networkFee).toString()),
-                    grossAmount: Number(grossAmt.toString())
-                } 
-            },
-            { upsert: true }
-        );
-    }
-
-    await tx.save();
+  // 🔐 Idempotency guard
+  if (tx.status === "COMPLETED") {
+    console.info(`🔁 Withdrawal already completed: ${reference}`);
     return tx;
+  }
+
+  const flatFeeValue = await getFlatFee("WITHDRAWAL", tx.currency);
+  const flatFeeDecimal = new Decimal(flatFeeValue || 0);
+
+  const grossAmt = new Decimal(tx.amount || 0);
+  const netAmt = grossAmt.minus(flatFeeDecimal);
+
+  tx.status = "COMPLETED";
+  tx.metadata = { ...tx.metadata, providerData: data };
+
+  tx.feeDetails = {
+    ...tx.feeDetails,
+    platformFee: Number(flatFeeDecimal),
+    totalFee: Number(flatFeeDecimal),
+    netAmountReceived: Number(netAmt),
+    isDeductedFromAmount: true,
+  };
+
+  if (data.providerNetworkFee) {
+    const networkFee = Number(data.providerNetworkFee);
+    tx.feeDetails.networkFee = networkFee;
+
+    await FeeLog.findOneAndUpdate(
+      { transactionId: tx._id },
+      {
+        $setOnInsert: {
+          transactionId: tx._id,
+          type: "WITHDRAWAL",
+          currency: tx.currency,
+          provider: "BLOCKRADAR",
+        },
+        $set: {
+          platformFee: Number(flatFeeDecimal),
+          networkFee,
+          feeAmount: Number(flatFeeDecimal.add(networkFee)),
+          grossAmount: Number(grossAmt),
+        },
+      },
+      { upsert: true },
+    );
+  }
+
+  await tx.save();
+  return tx;
 }
 
 module.exports = { handleDepositConfirmed, handleWithdrawSuccess };

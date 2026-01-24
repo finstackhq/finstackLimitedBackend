@@ -25,7 +25,7 @@ router.post(
   "/withdraw/initiate",
   verifyToken,
   transactionLimiter,
-  initiateWithdrawal
+  initiateWithdrawal,
 );
 // NEW ROUTE (PHASE 2: VERIFY OTP AND COMPLETE WITHDRAWAL)
 // This is the final step, verifying the OTP and executing the external transaction.
@@ -33,14 +33,21 @@ router.post(
   "/withdraw/complete",
   verifyToken,
   transactionLimiter,
-  submitPaycrestWithdrawal
+  submitPaycrestWithdrawal,
+);
+// Alias for compatibility with frontend
+router.post(
+  "/withdraw/fiatComplete",
+  verifyToken,
+  transactionLimiter,
+  submitPaycrestWithdrawal,
 );
 // CRYPTO WITHDRAWAL ROUTE
 router.post(
   "/withdraw/cryptoComplete",
   verifyToken,
   transactionLimiter,
-  submitCryptoWithdrawal
+  submitCryptoWithdrawal,
 );
 
 module.exports = router;

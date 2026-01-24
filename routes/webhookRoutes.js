@@ -1,5 +1,8 @@
 const express = require("express");
-const { handleBlockradarWebhook, handlePaycrestWebhook } = require("../controllers/webhookController");
+const {
+  handleBlockradarWebhook,
+  handlePaycrestWebhook,
+} = require("../controllers/webhookController");
 
 const router = express.Router();
 

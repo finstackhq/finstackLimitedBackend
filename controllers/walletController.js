@@ -1,6 +1,7 @@
 const User = require("../models/userModel");
 const mongoose = require("mongoose");
 const Wallet = require("../models/walletModel");
+const Decimal = require("decimal.js");
 const { generateAndSendOtp, verifyOtp } = require("../utilities/otpUtils");
 const { getFlatFee } = require("../services/adminFeeService");
 const logger = require("../utilities/logger");
