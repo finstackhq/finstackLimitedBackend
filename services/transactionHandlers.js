@@ -381,8 +381,12 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     );
     return tx;
   } catch (err) {
-    if (session.inAtomicity()) await session.abortTransaction();
-    session.endSession();
+    // Use the standard way to check if a transaction is active
+    if (session && session.hasEnded === false) {
+      await session.abortTransaction();
+    }
+    if (session) session.endSession();
+
     console.error("❌ Deposit failed:", err.message);
     throw err;
   }

@@ -409,14 +409,11 @@ module.exports = {
   //   const trade = await P2PTrade.findOne({ reference });
   //   if (!trade) throw new TradeError("Trade not found", 404);
 
-  //   // Only buyer can confirm payment
   //   if (trade.userId.toString() !== buyerId.toString()) {
   //     throw new TradeError("Only the buyer can confirm payment", 403);
   //   }
 
-  //   // Status guard
   //   const validStatuses = [ALLOWED_STATES.INIT, ALLOWED_STATES.MERCHANT_PAID];
-
   //   if (!validStatuses.includes(trade.status)) {
   //     throw new TradeError(
   //       `Cannot confirm payment in status: ${trade.status}`,
@@ -424,128 +421,92 @@ module.exports = {
   //     );
   //   }
 
-  //   /**
-  //    * 🔑 CRITICAL FIX
-  //    * Determine who ACTUALLY owns the crypto being escrowed
-  //    *
-  //    * BUY  → Merchant is selling crypto → Merchant escrows
-  //    * SELL → User is selling crypto     → User escrows
-  //    */
   //   const escrowSourceUserId =
   //     trade.side === "BUY" ? trade.merchantId : trade.userId;
-
   //   const sourceWalletId = await resolveUserWalletId(
   //     escrowSourceUserId,
   //     trade.currencyTarget,
   //   );
-
-  //   // Escrow FULL GROSS amount (fees are handled at settlement)
   //   const escrowAmount = trade.amountCrypto;
 
-  //   let escrowTxId = null;
+  //   // ==========================================================
+  //   // 1️⃣ DATABASE FIRST (Prevent "Unknown Reference" Webhook Error)
+  //   // ==========================================================
+  //   const session = await mongoose.startSession();
+  //   session.startTransaction();
 
   //   try {
-  //     // =========================
-  //     // 1️⃣ EXTERNAL ESCROW
-  //     // =========================
+  //     // Create the local transaction record FIRST so it's ready for the webhook
+  //     await createIdempotentTransaction(
+  //       {
+  //         idempotencyKey: `P2P:${trade._id}:ESCROW`,
+  //         walletId: await resolveWalletObjectId(
+  //           escrowSourceUserId,
+  //           trade.currencyTarget,
+  //         ),
+  //         userId: escrowSourceUserId,
+  //         type: "P2P_ESCROW",
+  //         amount: -trade.amountCrypto,
+  //         currency: trade.currencyTarget,
+  //         status: "PENDING",
+  //         reference: trade.reference,
+  //         metadata: { p2pTradeId: trade._id },
+  //       },
+  //       session,
+  //     );
+
+  //     // Update trade status to show we are attempting escrow
+  //     const updatedTrade = await updateTradeStatusAndLogSafe(
+  //       trade._id,
+  //       ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
+  //       {
+  //         message: `Buyer confirmed payment. Initiating escrow.`,
+  //         actor: buyerId,
+  //         role: "buyer",
+  //         ip,
+  //       },
+  //       trade.status,
+  //       session,
+  //     );
+
+  //     // Commit the database changes BEFORE calling Blockradar
+  //     await session.commitTransaction();
+  //     session.endSession();
+
+  //     // ==========================================================
+  //     // 2️⃣ PROVIDER SECOND
+  //     // ==========================================================
   //     const transferResult = await blockrader.withdrawExternal(
-  //       sourceWalletId, // 1. sourceAddressId
-  //       blockrader.ESCROW_DESTINATION_ADDRESS, // 2. toCryptoAddress (The 0x... address)
-  //       escrowAmount, // 3. amount
-  //       trade.currencyTarget, // 4. currency (e.g., "USDC")
-  //       `${trade.reference}-ESCROW`, // 5. idempotencyKey
+  //       sourceWalletId,
+  //       blockrader.ESCROW_DESTINATION_ADDRESS,
+  //       escrowAmount,
+  //       trade.currencyTarget,
+  //       `${trade.reference}-ESCROW`, // This ID must match your webhook check
   //     );
 
   //     if (!transferResult) {
   //       throw new TradeError("Escrow transfer failed at provider");
   //     }
 
-  //     escrowTxId =
-  //       transferResult?.data?.id ||
-  //       transferResult?.txId ||
-  //       transferResult?.id ||
-  //       "n/a";
-
-  //     // =========================
-  //     // 2️⃣ ATOMIC DB UPDATE
-  //     // =========================
-  //     const session = await mongoose.startSession();
-  //     session.startTransaction();
-
-  //     try {
-  //       const updatedTrade = await updateTradeStatusAndLogSafe(
-  //         trade._id,
-  //         ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
-  //         {
-  //           message: `Buyer confirmed payment. Crypto escrowed (tx: ${escrowTxId}).`,
-  //           actor: buyerId,
-  //           role: "buyer",
-  //           ip,
-  //         },
-  //         trade.status,
-  //         session,
+  //     // Final notification and cleanup
+  //     const tradeId = trade._id;
+  //     setImmediate(() => {
+  //       notifyMerchantBuyerPaid(tradeId).catch((err) =>
+  //         logger.error("Merchant notification failed", err),
   //       );
+  //     });
+  //     await redisClient.del(`balances:${escrowSourceUserId}`);
 
-  //       // 🔑 ADD THIS BLOCK (ESCROW LEDGER)
-  //       await createIdempotentTransaction(
-  //         {
-  //           idempotencyKey: `P2P:${trade._id}:ESCROW`,
-  //           walletId: await resolveWalletObjectId(
-  //             escrowSourceUserId,
-  //             trade.currencyTarget,
-  //           ),
-  //           userId: escrowSourceUserId,
-  //           type: "P2P_ESCROW",
-  //           amount: -trade.amountCrypto, // 🔴 DEBIT
-  //           currency: trade.currencyTarget,
-  //           status: "PENDING",
-  //           reference: trade.reference,
-  //           metadata: { p2pTradeId: trade._id },
-  //         },
-  //         session,
-  //       );
-
-  //       await session.commitTransaction();
-
-  //       const tradeId = trade._id;
-
-  //       setImmediate(() => {
-  //         notifyMerchantBuyerPaid(tradeId).catch((err) => {
-  //           logger.error("Merchant trade notification failed", {
-  //             tradeId,
-  //             error: err.stack || err.message,
-  //           });
-  //         });
-  //       });
-  //       // Optional cache invalidation
-  //       await redisClient.del(`balances:${escrowSourceUserId}`);
-
-  //       return updatedTrade;
-  //     } catch (dbError) {
-  //       await session.abortTransaction();
-
-  //       // 🔥 IMPORTANT: Provider succeeded but DB failed
-  //       console.error(
-  //         `CRITICAL: Escrow sent but DB update failed. EscrowTx=${escrowTxId}, Trade=${trade.reference}`,
-  //       );
-
-  //       throw new TradeError(
-  //         "Payment confirmed but database update failed. Manual reconciliation required.",
-  //         500,
-  //       );
-  //     } finally {
-  //       session.endSession();
-  //     }
+  //     return updatedTrade;
   //   } catch (error) {
-  //     // =========================
-  //     // 3️⃣ FAIL-SAFE LOGGING
-  //     // =========================
+  //     if (session.inAtomicity()) await session.abortTransaction();
+  //     session.endSession();
+
   //     await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
   //       message: `confirmBuyerPayment failed: ${error.message}`,
   //       role: "system",
   //       ip,
   //     });
-
   //     throw error;
   //   }
   // },
@@ -576,33 +537,36 @@ module.exports = {
     );
     const escrowAmount = trade.amountCrypto;
 
-    // ==========================================================
-    // 1️⃣ DATABASE FIRST (Prevent "Unknown Reference" Webhook Error)
-    // ==========================================================
+    // Create the exact reference string used for the withdrawal
+    const escrowRef = `${trade.reference}-ESCROW`;
+
+    // We still use a session to ensure the trade update and local transaction are clean
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // Create the local transaction record FIRST so it's ready for the webhook
-      await createIdempotentTransaction(
-        {
-          idempotencyKey: `P2P:${trade._id}:ESCROW`,
-          walletId: await resolveWalletObjectId(
-            escrowSourceUserId,
-            trade.currencyTarget,
-          ),
-          userId: escrowSourceUserId,
-          type: "P2P_ESCROW",
-          amount: -trade.amountCrypto,
-          currency: trade.currencyTarget,
-          status: "PENDING",
-          reference: trade.reference,
-          metadata: { p2pTradeId: trade._id },
-        },
-        session,
+      // 1️⃣ SAVE TO DB FIRST (To prevent "Unknown Reference" on webhook)
+      await Transaction.create(
+        [
+          {
+            reference: escrowRef,
+            userId: escrowSourceUserId,
+            walletId: await resolveWalletObjectId(
+              escrowSourceUserId,
+              trade.currencyTarget,
+            ),
+            amount: trade.amountCrypto,
+            currency: trade.currencyTarget,
+            type: "WITHDRAWAL",
+            status: "PENDING",
+            source: "BLOCKRADAR",
+            metadata: { p2pTradeId: trade._id },
+          },
+        ],
+        { session },
       );
 
-      // Update trade status to show we are attempting escrow
+      // Update trade status
       const updatedTrade = await updateTradeStatusAndLogSafe(
         trade._id,
         ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
@@ -616,37 +580,37 @@ module.exports = {
         session,
       );
 
-      // Commit the database changes BEFORE calling Blockradar
+      // Commit local DB changes before hitting the external API
       await session.commitTransaction();
       session.endSession();
 
-      // ==========================================================
-      // 2️⃣ PROVIDER SECOND
-      // ==========================================================
+      // 2️⃣ THEN CALL BLOCKRADAR
       const transferResult = await blockrader.withdrawExternal(
         sourceWalletId,
         blockrader.ESCROW_DESTINATION_ADDRESS,
         escrowAmount,
         trade.currencyTarget,
-        `${trade.reference}-ESCROW`, // This ID must match your webhook check
+        escrowRef, // Pass the matching reference
       );
 
       if (!transferResult) {
         throw new TradeError("Escrow transfer failed at provider");
       }
 
-      // Final notification and cleanup
       const tradeId = trade._id;
       setImmediate(() => {
         notifyMerchantBuyerPaid(tradeId).catch((err) =>
           logger.error("Merchant notification failed", err),
         );
       });
-      await redisClient.del(`balances:${escrowSourceUserId}`);
 
+      await redisClient.del(`balances:${escrowSourceUserId}`);
       return updatedTrade;
     } catch (error) {
-      if (session.inAtomicity()) await session.abortTransaction();
+      // Standard session check (Fixes the .inAtomicity error)
+      if (session && !session.hasEnded) {
+        await session.abortTransaction();
+      }
       session.endSession();
 
       await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
