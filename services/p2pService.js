@@ -521,6 +521,8 @@ module.exports = {
       throw new TradeError("Only the buyer can confirm payment", 403);
     }
 
+    // If it failed before, you might need to manually reset it in the DB to test again,
+    // but here we check for the valid starting states.
     const validStatuses = [ALLOWED_STATES.INIT, ALLOWED_STATES.MERCHANT_PAID];
     if (!validStatuses.includes(trade.status)) {
       throw new TradeError(
@@ -540,15 +542,16 @@ module.exports = {
     // Create the exact reference string used for the withdrawal
     const escrowRef = `${trade.reference}-ESCROW`;
 
-    // We still use a session to ensure the trade update and local transaction are clean
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // 1️⃣ SAVE TO DB FIRST (To prevent "Unknown Reference" on webhook)
+      // 1️⃣ SAVE TO DB FIRST
+      // Added idempotencyKey to satisfy your Schema requirement
       await Transaction.create(
         [
           {
+            idempotencyKey: `P2P-ESCROW-${trade._id}-${Date.now()}`,
             reference: escrowRef,
             userId: escrowSourceUserId,
             walletId: await resolveWalletObjectId(
@@ -590,7 +593,7 @@ module.exports = {
         blockrader.ESCROW_DESTINATION_ADDRESS,
         escrowAmount,
         trade.currencyTarget,
-        escrowRef, // Pass the matching reference
+        escrowRef,
       );
 
       if (!transferResult) {
@@ -607,12 +610,12 @@ module.exports = {
       await redisClient.del(`balances:${escrowSourceUserId}`);
       return updatedTrade;
     } catch (error) {
-      // Standard session check (Fixes the .inAtomicity error)
       if (session && !session.hasEnded) {
         await session.abortTransaction();
       }
       session.endSession();
 
+      // Log the failure so we know why it failed
       await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
         message: `confirmBuyerPayment failed: ${error.message}`,
         role: "system",
