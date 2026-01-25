@@ -239,6 +239,158 @@ const FeeLog = require("../models/feeLogModel");
 const Decimal = require("decimal.js");
 const { getFlatFee } = require("./adminFeeService");
 
+// async function handleDepositConfirmed(webhookPayload = {}) {
+//   if (webhookPayload.event !== "deposit.success") return null;
+
+//   // Fix: Blockradar nests details in 'data'
+//   const data = webhookPayload.data || webhookPayload.payload || {};
+
+//   const {
+//     id: externalTxId,
+//     amountPaid,
+//     currency = "USDC",
+//     senderAddress,
+//     recipientAddress,
+//     reference,
+//     wallet: blockradarWallet,
+//   } = data;
+
+//   // Validation
+//   if (!externalTxId || !amountPaid || !reference) {
+//     console.warn("⚠️ Invalid Blockradar deposit payload", data);
+//     return null;
+//   }
+
+//   // --- CURRENCY NORMALIZATION ---
+//   let normalizedCurrency = currency.toUpperCase();
+//   if (normalizedCurrency === "USD") normalizedCurrency = "USDC";
+//   // Explicitly ensuring CNGN remains CNGN (matches your DB)
+//   if (normalizedCurrency === "CNGN") normalizedCurrency = "CNGN";
+
+//   // 🔐 Idempotency check
+//   const alreadyProcessed = await Transaction.findOne({
+//     externalTxId,
+//     source: "BLOCKRADAR",
+//   });
+
+//   if (alreadyProcessed) {
+//     console.info(`🔁 Deposit already processed: ${externalTxId}`);
+//     return alreadyProcessed;
+//   }
+
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     let wallet = null;
+
+//     // --- WALLET LOOKUP ---
+//     if (blockradarWallet?.id) {
+//       wallet = await Wallet.findOne({
+//         externalWalletId: blockradarWallet.id,
+//         currency: normalizedCurrency,
+//         status: "ACTIVE",
+//       }).session(session);
+//     }
+
+//     if (!wallet && blockradarWallet?.address) {
+//       wallet = await Wallet.findOne({
+//         walletAddress: blockradarWallet.address,
+//         currency: normalizedCurrency,
+//         status: "ACTIVE",
+//       }).session(session);
+//     }
+
+//     if (!wallet) {
+//       throw new Error(
+//         `Wallet not found for Blockradar deposit | extTx=${externalTxId} | Currency=${normalizedCurrency}`,
+//       );
+//     }
+
+//     const grossAmount = new Decimal(amountPaid);
+//     const flatFeeValue = await getFlatFee("DEPOSIT", normalizedCurrency);
+//     const feeAmount = new Decimal(flatFeeValue || 0);
+
+//     if (feeAmount.gt(grossAmount)) {
+//       throw new Error("Deposit fee exceeds amount");
+//     }
+
+//     const netAmount = grossAmount.minus(feeAmount);
+
+//     // Credit wallet
+//     await Wallet.updateOne(
+//       { _id: wallet._id },
+//       { $inc: { balance: Number(netAmount) } },
+//       { session },
+//     );
+
+//     // Create transaction record
+//     const [tx] = await Transaction.create(
+//       [
+//         {
+//           walletId: wallet._id,
+//           userId: wallet.user_id,
+//           externalTxId,
+//           reference,
+//           type: "DEPOSIT",
+//           source: "BLOCKRADAR",
+//           amount: Number(grossAmount),
+//           netAmount: Number(netAmount),
+//           currency: normalizedCurrency,
+//           status: "COMPLETED",
+//           metadata: {
+//             senderAddress,
+//             recipientAddress,
+//             rawWebhook: data,
+//           },
+//           feeDetails: {
+//             platformFee: Number(feeAmount),
+//             totalFee: Number(feeAmount),
+//             networkFee: 0,
+//             isDeductedFromAmount: true,
+//           },
+//         },
+//       ],
+//       { session },
+//     );
+
+//     if (feeAmount.gt(0)) {
+//       await FeeLog.create(
+//         [
+//           {
+//             userId: wallet.user_id,
+//             transactionId: tx._id,
+//             type: "DEPOSIT",
+//             currency: normalizedCurrency,
+//             grossAmount: Number(grossAmount),
+//             feeAmount: Number(feeAmount),
+//             platformFee: Number(feeAmount),
+//             reference,
+//             provider: "BLOCKRADAR",
+//           },
+//         ],
+//         { session },
+//       );
+//     }
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     console.info(
+//       `✅ Deposit credited | ${netAmount.toString()} ${normalizedCurrency}`,
+//     );
+//     return tx;
+//   } catch (err) {
+//     // Use the standard way to check if a transaction is active
+//     if (session && session.hasEnded === false) {
+//       await session.abortTransaction();
+//     }
+//     if (session) session.endSession();
+
+//     console.error("❌ Deposit failed:", err.message);
+//     throw err;
+//   }
+// }
 async function handleDepositConfirmed(webhookPayload = {}) {
   if (webhookPayload.event !== "deposit.success") return null;
 
@@ -264,8 +416,9 @@ async function handleDepositConfirmed(webhookPayload = {}) {
   // --- CURRENCY NORMALIZATION ---
   let normalizedCurrency = currency.toUpperCase();
   if (normalizedCurrency === "USD") normalizedCurrency = "USDC";
-  // Explicitly ensuring CNGN remains CNGN (matches your DB)
-  if (normalizedCurrency === "CNGN") normalizedCurrency = "CNGN";
+
+  // FIX: Explicitly mapping NGN from webhook to CNGN in your DB
+  if (normalizedCurrency === "NGN") normalizedCurrency = "CNGN";
 
   // 🔐 Idempotency check
   const alreadyProcessed = await Transaction.findOne({
@@ -285,6 +438,7 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     let wallet = null;
 
     // --- WALLET LOOKUP ---
+    // This will now look for "CNGN" instead of "NGN"
     if (blockradarWallet?.id) {
       wallet = await Wallet.findOne({
         externalWalletId: blockradarWallet.id,
@@ -381,7 +535,6 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     );
     return tx;
   } catch (err) {
-    // Use the standard way to check if a transaction is active
     if (session && session.hasEnded === false) {
       await session.abortTransaction();
     }
@@ -391,7 +544,6 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     throw err;
   }
 }
-
 async function handleWithdrawSuccess(eventData = {}) {
   const data = eventData.data || eventData.payload || eventData;
   const { reference } = data;
