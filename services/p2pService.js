@@ -970,14 +970,23 @@ module.exports = {
         const releaseKey = `P2P-REL-FINAL-${tradeTx._id}`;
 
         // 3. THE FIX: Pass the recipient's real address and wallet ID
-        const releaseResult = await blockrader.withdrawExternal(
-          process.env.COMPANY_ESCROW_ACCOUNT_ID, // Your Master Wallet UUID
-          recipientWallet.walletAddress, // The "To" Address (Fixes the 'null' error)
-          tradeTx.netCryptoAmount,
-          tradeTx.currencyTarget,
-          `${tradeTx.reference}-RELEASE`,
-          releaseKey,
-          recipientWallet.externalWalletId, // Destination Wallet ID in Blockradar
+        // const releaseResult = await blockrader.withdrawExternal(
+        //   process.env.COMPANY_ESCROW_ACCOUNT_ID, // Your Master Wallet UUID
+        //   recipientWallet.walletAddress, // The "To" Address (Fixes the 'null' error)
+        //   tradeTx.netCryptoAmount,
+        //   tradeTx.currencyTarget,
+        //   `${tradeTx.reference}-RELEASE`,
+        //   releaseKey,
+        //   recipientWallet.externalWalletId, // Destination Wallet ID in Blockradar
+        // );
+
+        const releaseResult = await blockrader.transferFunds(
+          process.env.COMPANY_ESCROW_ACCOUNT_ID, // sourceAddressId (Master)
+          recipientWallet.externalWalletId, // destinationAddressId (Child UUID)
+          tradeTx.netCryptoAmount, // amount
+          tradeTx.currencyTarget, // currency
+          recipientWallet.walletAddress, // destinationCryptoAddress (0x...)
+          releaseKey, // p2pReference
         );
 
         if (!releaseResult) {
