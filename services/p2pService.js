@@ -17,6 +17,7 @@ const {
   notifyMerchantBuyerPaid,
   notifyBuyerOfMerchantPayment,
   notifyUserOfAdminResolution,
+  generateCryptoReleasedMail,
   notifyMerchantOfAdminResolution,
 } = require("../utilities/notificationService");
 const { getFlatFee } = require("./adminFeeService");
