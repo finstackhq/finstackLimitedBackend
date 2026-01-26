@@ -6,6 +6,7 @@ const {
   generateBuyerPaidMail,
   generateMerchantPaidMail,
   generateAdminResolutionMail,
+  generateCryptoReleasedMail,
 } = require("./mailGenerator");
 const logger = require("./logger");
 
@@ -154,7 +155,7 @@ const notifyUserOfCryptoRelease = async (tradeId) => {
 
   if (!trade?.userId?.email) return;
 
-  const mail = generateCryptoReleaseMail({
+  const mail = generateCryptoReleasedMail({
     firstName: trade.userId.firstName,
     amount: trade.netCryptoAmount,
     currency: trade.currencyTarget,
