@@ -328,9 +328,75 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     session.endSession();
   }
 }
+// async function handleWithdrawSuccess(eventData = {}) {
+//   const data = eventData.data || eventData.payload || eventData;
+//   const { reference } = data;
+
+//   if (!reference) {
+//     console.warn(
+//       "Withdrawal success called with missing reference:",
+//       eventData,
+//     );
+//     return null;
+//   }
+
+//   const tx = await Transaction.findOne({ reference });
+//   if (!tx) {
+//     console.warn("Withdrawal success for unknown reference:", reference);
+//     return null;
+//   }
+
+//   if (tx.status === "COMPLETED") {
+//     console.info(`🔁 Withdrawal already completed: ${reference}`);
+//     return tx;
+//   }
+
+//   const flatFeeValue = await getFlatFee("WITHDRAWAL", tx.currency);
+//   const flatFeeDecimal = new Decimal(flatFeeValue || 0);
+//   const grossAmt = new Decimal(tx.amount || 0);
+//   const netAmt = grossAmt.minus(flatFeeDecimal);
+
+//   tx.status = "COMPLETED";
+//   tx.metadata = { ...tx.metadata, providerData: data };
+//   tx.feeDetails = {
+//     ...tx.feeDetails,
+//     platformFee: Number(flatFeeDecimal),
+//     totalFee: Number(flatFeeDecimal),
+//     netAmountReceived: Number(netAmt),
+//     isDeductedFromAmount: true,
+//   };
+
+//   if (data.gasFee) {
+//     const networkFee = Number(data.gasFee);
+//     tx.feeDetails.networkFee = networkFee;
+
+//     await FeeLog.findOneAndUpdate(
+//       { transactionId: tx._id },
+//       {
+//         $setOnInsert: {
+//           transactionId: tx._id,
+//           type: "WITHDRAWAL",
+//           currency: tx.currency,
+//           provider: "BLOCKRADAR",
+//         },
+//         $set: {
+//           platformFee: Number(flatFeeDecimal),
+//           networkFee,
+//           feeAmount: Number(flatFeeDecimal.add(networkFee)),
+//           grossAmount: Number(grossAmt),
+//         },
+//       },
+//       { upsert: true },
+//     );
+//   }
+
+//   await tx.save();
+//   return tx;
+// }
+
 async function handleWithdrawSuccess(eventData = {}) {
   const data = eventData.data || eventData.payload || eventData;
-  const { reference } = data;
+  const { reference, id: externalTxId } = data;
 
   if (!reference) {
     console.warn(
@@ -340,8 +406,23 @@ async function handleWithdrawSuccess(eventData = {}) {
     return null;
   }
 
-  const tx = await Transaction.findOne({ reference });
+  // 1️⃣ IMPROVED SEARCH: Check reference OR idempotencyKey
+  const tx = await Transaction.findOne({
+    $or: [
+      { reference: reference },
+      { idempotencyKey: reference },
+      { externalTxId: externalTxId },
+    ],
+  });
+
   if (!tx) {
+    // Specifically handle the P2P Release case if the transaction record isn't found
+    if (reference.startsWith("P2P-REL-FINAL")) {
+      console.info(
+        `✅ Blockradar confirmed P2P Release: ${reference}. No internal ledger update needed.`,
+      );
+      return null;
+    }
     console.warn("Withdrawal success for unknown reference:", reference);
     return null;
   }
@@ -351,12 +432,15 @@ async function handleWithdrawSuccess(eventData = {}) {
     return tx;
   }
 
+  // 2️⃣ CALCULATE FEES (keeping your existing logic)
   const flatFeeValue = await getFlatFee("WITHDRAWAL", tx.currency);
   const flatFeeDecimal = new Decimal(flatFeeValue || 0);
   const grossAmt = new Decimal(tx.amount || 0);
   const netAmt = grossAmt.minus(flatFeeDecimal);
 
+  // 3️⃣ UPDATE TRANSACTION
   tx.status = "COMPLETED";
+  tx.externalTxId = externalTxId; // Link the Blockradar ID
   tx.metadata = { ...tx.metadata, providerData: data };
   tx.feeDetails = {
     ...tx.feeDetails,
@@ -391,6 +475,7 @@ async function handleWithdrawSuccess(eventData = {}) {
   }
 
   await tx.save();
+  console.log(`💰 Transaction ${tx.reference} finalized via Webhook.`);
   return tx;
 }
 

@@ -710,205 +710,123 @@ module.exports = {
         "Verification code sent to your email. Enter OTP to release crypto.",
     };
   },
-  //
+
   // async confirmAndReleaseCrypto(params = {}) {
   //   const tradeReference = params.tradeId || params.reference;
   //   const confirmerUserId = params.confirmerUserId || params.requesterId;
   //   const otpCode = params.otpCode;
 
-  //   if (!tradeReference || typeof tradeReference !== "string") {
-  //     throw new TradeError("Trade reference is required", 400);
-  //   }
-
+  //   if (!tradeReference) throw new TradeError("Trade reference is required");
   //   const normalizedReference = tradeReference.trim();
 
-  //   // Load trade (OUTSIDE tx)
+  //   // 1. Find the trade to see who the recipient is
   //   let trade = await P2PTrade.findOne({ reference: normalizedReference });
-  //   if (!trade) {
-  //     throw new TradeError("Trade not found", 404);
-  //   }
+  //   if (!trade) throw new TradeError("Trade not found", 404);
 
-  // // Determine releasable statuses dynamically
-  // let releasableStatuses = [
-  //   ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
-  //   ALLOWED_STATES.RELEASING,
-  //   ALLOWED_STATES.COMPLETED,
-  // ];
-
-  //   if (trade.side === "SELL") {
-  //     releasableStatuses.push(ALLOWED_STATES.MERCHANT_PAID); // SELL → user can release after merchant pays
-  //   }
-
-  //   // Re-query with status filter
-  //   trade = await P2PTrade.findOne({
-  //     reference: normalizedReference,
-  //     status: { $in: releasableStatuses },
-  //   });
-
-  //   if (!trade) {
-  //     throw new TradeError("Trade not found or not releasable", 404);
-  //   }
-
-  //   //  Authorization FIRST
+  //   // Determine Recipient:
+  //   // If BUY -> User receives crypto. If SELL -> Merchant receives crypto.
+  //   const recipientUserId =
+  //     trade.side === "BUY" ? trade.userId : trade.merchantId;
   //   const sellerId = trade.side === "BUY" ? trade.merchantId : trade.userId;
 
-  //   if (
-  //     !confirmerUserId ||
-  //     confirmerUserId.toString() !== sellerId.toString()
-  //   ) {
-  //     throw new TradeError("Unauthorized to release crypto", 403);
+  //   // 2. Fetch the recipient's EXACT wallet for this specific currency
+  //   const recipientWallet = await Wallet.findOne({
+  //     user_id: recipientUserId,
+  //     currency: trade.currencyTarget, // e.g., 'CNGN' or 'USDC'
+  //     status: "ACTIVE",
+  //     provider: "BLOCKRADAR",
+  //   });
+
+  //   if (!recipientWallet || !recipientWallet.walletAddress) {
+  //     throw new TradeError(
+  //       `Recipient does not have an active ${trade.currencyTarget} wallet.`,
+  //     );
   //   }
 
-  //   // Idempotent exit
-  //   if (trade.status === ALLOWED_STATES.COMPLETED) {
-  //     return trade;
+  //   // Security Check: Only the seller can release
+  //   if (confirmerUserId.toString() !== sellerId.toString()) {
+  //     throw new TradeError(
+  //       "Unauthorized: Only the seller can release crypto",
+  //       403,
+  //     );
   //   }
 
-  //   //  OTP verification (ONCE)
-  //   if (!otpCode) {
-  //     throw new TradeError("OTP code is required", 400);
-  //   }
-
+  //   // OTP Validation
   //   const otpValid = await verifyOtp(
   //     sellerId.toString(),
   //     "P2P_SETTLEMENT",
   //     otpCode,
   //   );
+  //   if (!otpValid) throw new TradeError("Invalid or expired OTP", 401);
 
-  //   if (!otpValid) {
-  //     throw new TradeError("Invalid or expired OTP", 401);
-  //   }
-
-  //   // Transaction STARTS
   //   const session = await mongoose.startSession();
-
   //   try {
   //     await session.withTransaction(async () => {
-  //       // 🔒 Re-fetch trade INSIDE tx
   //       const tradeTx = await P2PTrade.findOne({
   //         reference: normalizedReference,
-  //         status: { $in: releasableStatuses }, // use the same array as outside
+  //         status: { $ne: "COMPLETED" },
   //       }).session(session);
 
-  //       if (!tradeTx) {
-  //         throw new TradeError("Trade already finalized", 409);
+  //       if (!tradeTx) throw new TradeError("Trade already completed", 409);
+
+  //       const releaseKey = `P2P-REL-FINAL-${tradeTx._id}`;
+
+  //       const releaseResult = await blockrader.transferFunds(
+  //         process.env.COMPANY_ESCROW_ACCOUNT_ID, // sourceAddressId (Master)
+  //         recipientWallet.externalWalletId, // destinationAddressId (Child UUID)
+  //         tradeTx.netCryptoAmount, // amount
+  //         tradeTx.currencyTarget, // currency
+  //         recipientWallet.walletAddress, // destinationCryptoAddress (0x...)
+  //         releaseKey, // p2pReference
+  //       );
+
+  //       if (!releaseResult) {
+  //         throw new TradeError("Blockchain release failed at provider level");
   //       }
 
-  //       // Move to RELEASING
-  //       if (tradeTx.status !== ALLOWED_STATES.RELEASING) {
-  //         tradeTx.status = ALLOWED_STATES.RELEASING;
-  //         await tradeTx.save({ session });
-  //       }
+  //       // 4. Record the transaction in your ledger
+  //       await Transaction.create(
+  //         [
+  //           {
+  //             idempotencyKey: releaseKey,
+  //             walletId: recipientWallet._id,
+  //             userId: recipientUserId,
+  //             type: "P2P_RELEASE",
+  //             amount: tradeTx.netCryptoAmount,
+  //             currency: tradeTx.currencyTarget,
+  //             status: "COMPLETED",
+  //             reference: releaseKey,
+  //           },
+  //         ],
+  //         { session },
+  //       );
 
-  //       // Load wallets
-
-  //       const sellerWallet = await Wallet.findOne({
-  //         user_id: sellerId,
-  //         currency: tradeTx.currencyTarget,
-  //         walletType: "USER",
-  //         provider: "BLOCKRADAR",
-  //         status: "ACTIVE",
-  //       }).session(session);
-
-  //       if (!sellerWallet) {
-  //         throw new TradeError("Seller wallet not found", 404);
-  //       }
-
-  //       const platformWallet = await Wallet.findOne({
-  //         walletType: "MASTER",
-  //         currency: tradeTx.currencyTarget,
-  //         provider: "BLOCKRADAR",
-  //         status: "ACTIVE",
-  //       }).session(session);
-
-  //       // Ledger: Release crypto (idempotent)
-
-  //       const releaseKey = `P2P:${tradeTx._id}:RELEASE`;
-
-  //       const releaseExists = await Transaction.findOne({
-  //         idempotencyKey: releaseKey,
-  //       }).session(session);
-
-  //       if (!releaseExists) {
-  //         await Transaction.create(
-  //           [
-  //             {
-  //               walletId: sellerWallet._id,
-  //               userId: sellerId,
-  //               type: "P2P_RELEASE",
-  //               amount: tradeTx.netCryptoAmount,
-  //               currency: tradeTx.currencyTarget,
-  //               status: "COMPLETED",
-  //               reference: tradeTx.reference,
-  //               idempotencyKey: releaseKey,
-  //             },
-  //           ],
-  //           { session },
-  //         );
-  //       }
-
-  //       //  Platform fee (idempotent)
-
-  //       if (tradeTx.platformFeeCrypto > 0 && platformWallet) {
-  //         const feeSellerKey = `P2P:${tradeTx._id}:FEE_SELLER`;
-  //         const feePlatformKey = `P2P:${tradeTx._id}:FEE_PLATFORM`;
-
-  //         const feeExists = await Transaction.findOne({
-  //           $or: [
-  //             { idempotencyKey: feeSellerKey },
-  //             { idempotencyKey: feePlatformKey },
-  //           ],
-  //         }).session(session);
-
-  //         if (!feeExists) {
-  //           await Transaction.create(
-  //             [
-  //               {
-  //                 walletId: sellerWallet._id,
-  //                 userId: sellerId,
-  //                 type: "P2P_FEE",
-  //                 amount: -tradeTx.platformFeeCrypto,
-  //                 currency: tradeTx.currencyTarget,
-  //                 status: "COMPLETED",
-  //                 reference: tradeTx.reference,
-  //                 idempotencyKey: feeSellerKey,
-  //               },
-  //               {
-  //                 walletId: platformWallet._id,
-  //                 userId: platformWallet.user_id,
-  //                 type: "P2P_FEE",
-  //                 amount: tradeTx.platformFeeCrypto,
-  //                 currency: tradeTx.currencyTarget,
-  //                 status: "COMPLETED",
-  //                 reference: tradeTx.reference,
-  //                 idempotencyKey: feePlatformKey,
-  //               },
-  //             ],
-  //             { session },
-  //           );
-  //         }
-  //       }
-
-  //       //  Finalize trade
-  //       tradeTx.status = ALLOWED_STATES.COMPLETED;
+  //       // 5. Finalize Trade
+  //       tradeTx.status = "COMPLETED";
   //       tradeTx.settledAt = new Date();
+  //       tradeTx.logs.push({
+  //         message: `Released ${tradeTx.netCryptoAmount} ${tradeTx.currencyTarget} to recipient.`,
+  //         actor: confirmerUserId,
+  //         role: "seller",
+  //         time: new Date(),
+  //       });
+
   //       await tradeTx.save({ session });
   //     });
-  //     //  Reload finalized trade
-  //     const finalTrade = await P2PTrade.findOne({
-  //       reference: normalizedReference,
-  //     }).lean();
-
-  //     // Cache cleanup (non-blocking)
-  //     redisClient.del(`balances:${finalTrade.userId}`).catch(() => {});
-  //     redisClient.del(`balances:${finalTrade.merchantId}`).catch(() => {});
-
-  //     return finalTrade;
+  //     this.notifyRecipientOfRelease(finalTradeData).catch((err) =>
+  //       console.error(
+  //         "[EmailError] P2P Release notification failed:",
+  //         err.message,
+  //       ),
+  //     );
+  //     return await P2PTrade.findOne({ reference: normalizedReference }).lean();
+  //   } catch (error) {
+  //     console.error("Release Process Failed:", error.message);
+  //     throw error;
   //   } finally {
   //     session.endSession();
   //   }
   // },
-
   async confirmAndReleaseCrypto(params = {}) {
     const tradeReference = params.tradeId || params.reference;
     const confirmerUserId = params.confirmerUserId || params.requesterId;
@@ -921,16 +839,14 @@ module.exports = {
     let trade = await P2PTrade.findOne({ reference: normalizedReference });
     if (!trade) throw new TradeError("Trade not found", 404);
 
-    // Determine Recipient:
-    // If BUY -> User receives crypto. If SELL -> Merchant receives crypto.
     const recipientUserId =
       trade.side === "BUY" ? trade.userId : trade.merchantId;
     const sellerId = trade.side === "BUY" ? trade.merchantId : trade.userId;
 
-    // 2. Fetch the recipient's EXACT wallet for this specific currency
+    // 2. Fetch the recipient's wallet
     const recipientWallet = await Wallet.findOne({
       user_id: recipientUserId,
-      currency: trade.currencyTarget, // e.g., 'CNGN' or 'USDC'
+      currency: trade.currencyTarget,
       status: "ACTIVE",
       provider: "BLOCKRADAR",
     });
@@ -941,7 +857,7 @@ module.exports = {
       );
     }
 
-    // Security Check: Only the seller can release
+    // Security Check
     if (confirmerUserId.toString() !== sellerId.toString()) {
       throw new TradeError(
         "Unauthorized: Only the seller can release crypto",
@@ -959,6 +875,8 @@ module.exports = {
 
     const session = await mongoose.startSession();
     try {
+      let finalTradeData; // Variable defined here for scope access
+
       await session.withTransaction(async () => {
         const tradeTx = await P2PTrade.findOne({
           reference: normalizedReference,
@@ -969,31 +887,20 @@ module.exports = {
 
         const releaseKey = `P2P-REL-FINAL-${tradeTx._id}`;
 
-        // 3. THE FIX: Pass the recipient's real address and wallet ID
-        // const releaseResult = await blockrader.withdrawExternal(
-        //   process.env.COMPANY_ESCROW_ACCOUNT_ID, // Your Master Wallet UUID
-        //   recipientWallet.walletAddress, // The "To" Address (Fixes the 'null' error)
-        //   tradeTx.netCryptoAmount,
-        //   tradeTx.currencyTarget,
-        //   `${tradeTx.reference}-RELEASE`,
-        //   releaseKey,
-        //   recipientWallet.externalWalletId, // Destination Wallet ID in Blockradar
-        // );
-
         const releaseResult = await blockrader.transferFunds(
-          process.env.COMPANY_ESCROW_ACCOUNT_ID, // sourceAddressId (Master)
-          recipientWallet.externalWalletId, // destinationAddressId (Child UUID)
-          tradeTx.netCryptoAmount, // amount
-          tradeTx.currencyTarget, // currency
-          recipientWallet.walletAddress, // destinationCryptoAddress (0x...)
-          releaseKey, // p2pReference
+          process.env.COMPANY_ESCROW_ACCOUNT_ID,
+          recipientWallet.externalWalletId,
+          tradeTx.netCryptoAmount,
+          tradeTx.currencyTarget,
+          recipientWallet.walletAddress,
+          releaseKey,
         );
 
         if (!releaseResult) {
           throw new TradeError("Blockchain release failed at provider level");
         }
 
-        // 4. Record the transaction in your ledger
+        // 4. Record the transaction
         await Transaction.create(
           [
             {
@@ -1004,7 +911,7 @@ module.exports = {
               amount: tradeTx.netCryptoAmount,
               currency: tradeTx.currencyTarget,
               status: "COMPLETED",
-              reference: `${tradeTx.reference}-RELEASE`,
+              reference: releaseKey,
             },
           ],
           { session },
@@ -1021,9 +928,18 @@ module.exports = {
         });
 
         await tradeTx.save({ session });
+        finalTradeData = tradeTx.toObject(); // Assigning data for email trigger
       });
 
-      return await P2PTrade.findOne({ reference: normalizedReference }).lean();
+      // 6. Notify Recipient (Async call after transaction success)
+      this.notifyRecipientOfRelease(finalTradeData).catch((err) =>
+        console.error(
+          "[EmailError] P2P Release notification failed:",
+          err.message,
+        ),
+      );
+
+      return finalTradeData;
     } catch (error) {
       console.error("Release Process Failed:", error.message);
       throw error;
@@ -1031,6 +947,33 @@ module.exports = {
       session.endSession();
     }
   },
+
+  // Helper method to handle the email sending logic
+  async notifyRecipientOfRelease(trade) {
+    try {
+      const recipientId =
+        trade.side === "BUY" ? trade.userId : trade.merchantId;
+      const recipient = await User.findById(recipientId);
+      if (!recipient || !recipient.email) return;
+
+      const html = generateCryptoReleasedMail({
+        firstName: recipient.firstName,
+        amount: trade.netCryptoAmount,
+        currency: trade.currencyTarget,
+        reference: trade.reference,
+      });
+
+      // Assuming your email utility is imported as 'sendEmail'
+      await sendEmail({
+        to: recipient.email,
+        subject: `Crypto Released! ${trade.netCryptoAmount} ${trade.currencyTarget} received`,
+        html: html,
+      });
+    } catch (err) {
+      console.error("Notification helper error:", err.message);
+    }
+  },
+
   async cancelTrade(reference, userId, ip = null) {
     if (!reference) throw new TradeError("Reference required");
 
