@@ -403,6 +403,120 @@ module.exports = {
     return await P2PTrade.findById(trade._id).lean();
   },
 
+  // async confirmBuyerPayment(reference, buyerId, ip = null) {
+  //   if (!reference) throw new TradeError("Reference required");
+
+  //   const trade = await P2PTrade.findOne({ reference });
+  //   if (!trade) throw new TradeError("Trade not found", 404);
+
+  //   if (trade.userId.toString() !== buyerId.toString()) {
+  //     throw new TradeError("Only the buyer can confirm payment", 403);
+  //   }
+
+  //   // If it failed before, you might need to manually reset it in the DB to test again,
+  //   // but here we check for the valid starting states.
+  //   const validStatuses = [ALLOWED_STATES.INIT, ALLOWED_STATES.MERCHANT_PAID];
+  //   if (!validStatuses.includes(trade.status)) {
+  //     throw new TradeError(
+  //       `Cannot confirm payment in status: ${trade.status}`,
+  //       409,
+  //     );
+  //   }
+
+  //   const escrowSourceUserId =
+  //     trade.side === "BUY" ? trade.merchantId : trade.userId;
+  //   const sourceWalletId = await resolveUserWalletId(
+  //     escrowSourceUserId,
+  //     trade.currencyTarget,
+  //   );
+  //   const escrowAmount = trade.amountCrypto;
+
+  //   // Create the exact reference string used for the withdrawal
+  //   const escrowRef = `${trade.reference}-ESCROW`;
+
+  //   const session = await mongoose.startSession();
+  //   session.startTransaction();
+
+  //   try {
+  //     // 1️⃣ SAVE TO DB FIRST
+  //     // Added idempotencyKey to satisfy your Schema requirement
+  //     await Transaction.create(
+  //       [
+  //         {
+  //           idempotencyKey: `P2P-ESCROW-${trade._id}-${Date.now()}`,
+  //           reference: escrowRef,
+  //           userId: escrowSourceUserId,
+  //           walletId: await resolveWalletObjectId(
+  //             escrowSourceUserId,
+  //             trade.currencyTarget,
+  //           ),
+  //           amount: trade.amountCrypto,
+  //           currency: trade.currencyTarget,
+  //           type: "WITHDRAWAL",
+  //           status: "PENDING",
+  //           source: "BLOCKRADAR",
+  //           metadata: { p2pTradeId: trade._id },
+  //         },
+  //       ],
+  //       { session },
+  //     );
+
+  //     // Update trade status
+  //     const updatedTrade = await updateTradeStatusAndLogSafe(
+  //       trade._id,
+  //       ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
+  //       {
+  //         message: `Buyer confirmed payment. Initiating escrow.`,
+  //         actor: buyerId,
+  //         role: "buyer",
+  //         ip,
+  //       },
+  //       trade.status,
+  //       session,
+  //     );
+
+  //     // Commit local DB changes before hitting the external API
+  //     await session.commitTransaction();
+  //     session.endSession();
+
+  //     // 2️⃣ THEN CALL BLOCKRADAR
+  //     const transferResult = await blockrader.withdrawExternal(
+  //       sourceWalletId,
+  //       blockrader.ESCROW_DESTINATION_ADDRESS,
+  //       escrowAmount,
+  //       trade.currencyTarget,
+  //       escrowRef,
+  //     );
+
+  //     if (!transferResult) {
+  //       throw new TradeError("Escrow transfer failed at provider");
+  //     }
+
+  //     const tradeId = trade._id;
+  //     setImmediate(() => {
+  //       notifyMerchantBuyerPaid(tradeId).catch((err) =>
+  //         logger.error("Merchant notification failed", err),
+  //       );
+  //     });
+
+  //     await redisClient.del(`balances:${escrowSourceUserId}`);
+  //     return updatedTrade;
+  //   } catch (error) {
+  //     if (session && !session.hasEnded) {
+  //       await session.abortTransaction();
+  //     }
+  //     session.endSession();
+
+  //     // Log the failure so we know why it failed
+  //     await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
+  //       message: `confirmBuyerPayment failed: ${error.message}`,
+  //       role: "system",
+  //       ip,
+  //     });
+  //     throw error;
+  //   }
+  // },
+
   async confirmBuyerPayment(reference, buyerId, ip = null) {
     if (!reference) throw new TradeError("Reference required");
 
@@ -413,9 +527,7 @@ module.exports = {
       throw new TradeError("Only the buyer can confirm payment", 403);
     }
 
-    // If it failed before, you might need to manually reset it in the DB to test again,
-    // but here we check for the valid starting states.
-    const validStatuses = [ALLOWED_STATES.INIT, ALLOWED_STATES.MERCHANT_PAID];
+    const validStatuses = ["INIT", "MERCHANT_PAID"];
     if (!validStatuses.includes(trade.status)) {
       throw new TradeError(
         `Cannot confirm payment in status: ${trade.status}`,
@@ -431,19 +543,20 @@ module.exports = {
     );
     const escrowAmount = trade.amountCrypto;
 
-    // Create the exact reference string used for the withdrawal
     const escrowRef = `${trade.reference}-ESCROW`;
+
+    // ✅ STABLE KEY: This prevents double-charging if the user clicks twice
+    const escrowIdempotencyKey = `P2P-ESCROW-INIT-${trade._id}`;
 
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // 1️⃣ SAVE TO DB FIRST
-      // Added idempotencyKey to satisfy your Schema requirement
+      // 1️⃣ Create "PENDING" Withdrawal record locally
       await Transaction.create(
         [
           {
-            idempotencyKey: `P2P-ESCROW-${trade._id}-${Date.now()}`,
+            idempotencyKey: escrowIdempotencyKey,
             reference: escrowRef,
             userId: escrowSourceUserId,
             walletId: await resolveWalletObjectId(
@@ -454,17 +567,16 @@ module.exports = {
             currency: trade.currencyTarget,
             type: "WITHDRAWAL",
             status: "PENDING",
-            source: "BLOCKRADAR",
             metadata: { p2pTradeId: trade._id },
           },
         ],
         { session },
       );
 
-      // Update trade status
+      // 2️⃣ Update trade status
       const updatedTrade = await updateTradeStatusAndLogSafe(
         trade._id,
-        ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
+        "PAYMENT_CONFIRMED_BY_BUYER",
         {
           message: `Buyer confirmed payment. Initiating escrow.`,
           actor: buyerId,
@@ -475,40 +587,39 @@ module.exports = {
         session,
       );
 
-      // Commit local DB changes before hitting the external API
       await session.commitTransaction();
       session.endSession();
 
-      // 2️⃣ THEN CALL BLOCKRADAR
+      // 3️⃣ Call Blockradar with the SAME idempotency key
       const transferResult = await blockrader.withdrawExternal(
         sourceWalletId,
         blockrader.ESCROW_DESTINATION_ADDRESS,
         escrowAmount,
         trade.currencyTarget,
         escrowRef,
+        escrowIdempotencyKey, // 🔑 Vital for preventing double withdrawals
       );
 
       if (!transferResult) {
         throw new TradeError("Escrow transfer failed at provider");
       }
 
-      const tradeId = trade._id;
+      // 4️⃣ Async notification
       setImmediate(() => {
-        notifyMerchantBuyerPaid(tradeId).catch((err) =>
-          logger.error("Merchant notification failed", err),
+        notifyMerchantBuyerPaid(trade._id).catch((err) =>
+          console.error("Merchant notification failed", err),
         );
       });
 
       await redisClient.del(`balances:${escrowSourceUserId}`);
+
       return updatedTrade;
     } catch (error) {
-      if (session && !session.hasEnded) {
-        await session.abortTransaction();
-      }
+      if (session.inTransaction()) await session.abortTransaction();
       session.endSession();
 
-      // Log the failure so we know why it failed
-      await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
+      // Update trade status as failed so merchant/buyer knows why it stopped
+      await updateTradeStatusAndLogSafe(trade._id, "FAILED", {
         message: `confirmBuyerPayment failed: ${error.message}`,
         role: "system",
         ip,
@@ -516,6 +627,7 @@ module.exports = {
       throw error;
     }
   },
+
   async merchantMarksFiatSent(reference, merchantId, ip = null) {
     if (!reference) throw new TradeError("Reference required");
 
