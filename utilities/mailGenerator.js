@@ -532,62 +532,30 @@ const generateCryptoReleasedMail = ({
   amount,
   currency,
   reference,
-}) => {
-  return `
+}) => ({
+  subject: "Crypto Released Successfully 🎉",
+  text: `Hello ${firstName},
+  
+Your crypto has been released successfully.
+
+Amount: ${amount} ${currency}
+Trade Ref: ${reference}
+
+You can now access it in your wallet.`,
+
+  html: `
     <!DOCTYPE html>
     <html>
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Crypto Released - Finstack</title>
-    </head>
-    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f5f5f5; color: #333;">
-        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 20px auto;">
-            <tr>
-                <td style="background-color: #2F67FA; padding: 20px; text-align: center;">
-                    <h1 style="color: #ffffff; margin: 0; font-size: 28px;">Finstack</h1>
-                    <p style="color: #ffffff; margin: 5px 0 0 0; font-size: 14px;">Assets Delivered</p>
-                </td>
-            </tr>
-            
-            <tr>
-                <td style="background-color: #ffffff; padding: 30px; text-align: center;">
-                    <h2 style="color: #2F67FA; margin: 0 0 20px 0;">Crypto Released!</h2>
-                    
-                    <div style="font-size: 48px; margin: 20px 0;">💰</div>
-                    
-                    <p style="line-height: 1.6; margin: 0 0 20px 0;">
-                        Hello ${firstName},<br><br>
-                        Good news! The seller has released the crypto for your trade. 
-                        The assets are now available in your Finstack wallet.
-                    </p>
-
-                    <div style="background-color: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: left;">
-                        <p style="margin: 5px 0;"><strong>Amount:</strong> ${amount} ${currency}</p>
-                        <p style="margin: 5px 0;"><strong>Trade Ref:</strong> ${reference}</p>
-                        <p style="margin: 5px 0;"><strong>Status:</strong> Completed</p>
-                    </div>
-                    
-                    <table border="0" cellpadding="0" cellspacing="0" style="margin: 20px auto;">
-                        <tr>
-                            <td style="background-color: #2F67FA; border-radius: 5px;">
-                                <a href="${process.env.FRONTEND_URL}/dashboard" 
-                                   style="display: inline-block; padding: 14px 35px; color: #ffffff; 
-                                          text-decoration: none; font-weight: bold; font-size: 16px;">
-                                    View My Wallet
-                                </a>
-                            </td>
-                        </tr>
-                    </table>
-                </td>
-            </tr>
-            
-            ${SUPPORT_FOOTER}
-        </table>
+    <body>
+      <h2>Crypto Released!</h2>
+      <p>Hello ${firstName},</p>
+      <p>Your crypto has been released successfully.</p>
+      <p><strong>Amount:</strong> ${amount} ${currency}</p>
+      <p><strong>Trade Ref:</strong> ${reference}</p>
     </body>
     </html>
-  `;
-};
+  `,
+});
 
 const generateAdminResolutionMail = ({
   firstName,
