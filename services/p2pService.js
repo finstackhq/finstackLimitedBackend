@@ -527,7 +527,7 @@ module.exports = {
       throw new TradeError("Only the buyer can confirm payment", 403);
     }
 
-    const validStatuses = ["INIT", "MERCHANT_PAID"];
+    const validStatuses = ["INIT", "MERCHANT_PAID", "PENDING_PAYMENT"];
     if (!validStatuses.includes(trade.status)) {
       throw new TradeError(
         `Cannot confirm payment in status: ${trade.status}`,
