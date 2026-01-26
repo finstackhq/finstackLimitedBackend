@@ -20,7 +20,7 @@ const {
   notifyMerchantOfAdminResolution,
   notifyUserOfCryptoRelease,
 } = require("../utilities/notificationService");
-const { generateCryptoReleasedMail } = require("../utilities/mailGenerator");
+
 const { getFlatFee } = require("./adminFeeService");
 const UserBankAccount = require("../models/userBankAccountModel");
 
