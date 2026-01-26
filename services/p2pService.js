@@ -728,12 +728,12 @@ module.exports = {
   //     throw new TradeError("Trade not found", 404);
   //   }
 
-  //   // Determine releasable statuses dynamically
-  //   let releasableStatuses = [
-  //     ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
-  //     ALLOWED_STATES.RELEASING,
-  //     ALLOWED_STATES.COMPLETED,
-  //   ];
+  // // Determine releasable statuses dynamically
+  // let releasableStatuses = [
+  //   ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
+  //   ALLOWED_STATES.RELEASING,
+  //   ALLOWED_STATES.COMPLETED,
+  // ];
 
   //   if (trade.side === "SELL") {
   //     releasableStatuses.push(ALLOWED_STATES.MERCHANT_PAID); // SELL → user can release after merchant pays
@@ -922,11 +922,11 @@ module.exports = {
     let trade = await P2PTrade.findOne({ reference: normalizedReference });
     if (!trade) throw new TradeError("Trade not found", 404);
 
+    // We use the statuses your Model actually supports
     let releasableStatuses = [
       "PAYMENT_CONFIRMED_BY_BUYER",
-      "RELEASING",
       "COMPLETED",
-      "MERCHANT_PAID", // Included for SELL side trades
+      "MERCHANT_PAID",
     ];
 
     const sellerId = trade.side === "BUY" ? trade.merchantId : trade.userId;
@@ -953,6 +953,7 @@ module.exports = {
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
+        // Re-fetch inside session
         const tradeTx = await P2PTrade.findOne({
           reference: normalizedReference,
           status: { $in: releasableStatuses },
@@ -964,17 +965,13 @@ module.exports = {
             409,
           );
 
-        // 1️⃣ MARK AS RELEASING
-        tradeTx.status = "RELEASING";
-        await tradeTx.save({ session });
-
-        // 2️⃣ LEDGER: Create Release Record (Internal)
+        // 1️⃣ LEDGER: Create Release Record (Internal)
         const releaseKey = `P2P-RELEASE-FINAL-${tradeTx._id}`;
         await Transaction.findOneAndUpdate(
           { idempotencyKey: releaseKey },
           {
             $setOnInsert: {
-              walletId: new mongoose.Types.ObjectId(), // Virtual for recipient
+              walletId: new mongoose.Types.ObjectId(),
               userId: recipientUserId,
               type: "P2P_RELEASE",
               amount: tradeTx.netCryptoAmount,
@@ -987,36 +984,46 @@ module.exports = {
           { session, upsert: true },
         );
 
-        // 3️⃣ BLOCKCHAIN: The Actual Transfer
-        // Moves money from Escrow Wallet to Recipient's Blockradar Wallet
+        // 2️⃣ BLOCKCHAIN: The Actual Transfer
         const recipientWalletId = await resolveUserWalletId(
           recipientUserId,
           tradeTx.currencyTarget,
         );
 
         const releaseResult = await blockrader.withdrawExternal(
-          process.env.COMPANY_ESCROW_ACCOUNT_ID, // SOURCE: Your Master Escrow Wallet
-          null, // Recipient address is null because we are using recipientWalletId
+          process.env.COMPANY_ESCROW_ACCOUNT_ID,
+          null,
           tradeTx.netCryptoAmount,
           tradeTx.currencyTarget,
           `${tradeTx.reference}-RELEASE`,
-          releaseKey, // Reuse the stable key for provider idempotency
-          recipientWalletId, // DESTINATION: Recipient's Blockradar ID
+          releaseKey,
+          recipientWalletId,
         );
 
         if (!releaseResult) {
           throw new TradeError("Blockchain release failed at provider level");
         }
 
-        // 4️⃣ FINALIZE
+        // 3️⃣ FINALIZE (Go straight to COMPLETED)
         tradeTx.status = "COMPLETED";
         tradeTx.settledAt = new Date();
+
+        // Log the action
+        tradeTx.logs.push({
+          message: "Crypto released from escrow to buyer.",
+          actor: confirmerUserId,
+          role: "seller",
+          time: new Date(),
+        });
+
         await tradeTx.save({ session });
       });
 
       const finalTrade = await P2PTrade.findOne({
         reference: normalizedReference,
       }).lean();
+
+      // Clear cache
       redisClient.del(`balances:${finalTrade.userId}`).catch(() => {});
       redisClient.del(`balances:${finalTrade.merchantId}`).catch(() => {});
 
