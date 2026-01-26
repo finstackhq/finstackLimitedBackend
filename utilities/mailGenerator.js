@@ -483,13 +483,6 @@ Login to process this trade.`,
     <li><strong>Amount:</strong> ${amount} ${currency}</li>
     <li><strong>Trade Ref:</strong> ${safeRef}</li>
   </ul>
-
-  <p>
-    <a href="${process.env.FRONTEND_URL}/trades/${safeRef}">
-      View Trade
-    </a>
-  </p>
-
   <p>Please stay online until the trade is completed.</p>
 </body>
 </html>
