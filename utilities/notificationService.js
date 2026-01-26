@@ -1,7 +1,12 @@
 const sendMail = require("./sendMail");
 const User = require("../models/userModel");
 const P2PTrade = require("../models/p2pModel");
-const { generateTradeAlertMail, generateBuyerPaidMail, generateMerchantPaidMail, generateAdminResolutionMail } = require("./mailGenerator");
+const {
+  generateTradeAlertMail,
+  generateBuyerPaidMail,
+  generateMerchantPaidMail,
+  generateAdminResolutionMail,
+} = require("./mailGenerator");
 const logger = require("./logger");
 
 const notifyMerchantOfTrade = async (tradeId) => {
@@ -24,16 +29,11 @@ const notifyMerchantOfTrade = async (tradeId) => {
     side: trade.side,
   });
 
-  await sendMail(
-    merchant.email,
-    mail.subject,
-    mail.html,
-    mail.text
-  );
+  await sendMail(merchant.email, mail.subject, mail.html, mail.text);
 
   await P2PTrade.updateOne(
     { _id: tradeId },
-    { $set: { "notifications.merchantNotified": true } }
+    { $set: { "notifications.merchantNotified": true } },
   );
 
   global.io?.to(trade.merchantId.toString()).emit("trade:new", {
@@ -46,7 +46,6 @@ const notifyMerchantOfTrade = async (tradeId) => {
     merchantId: trade.merchantId,
   });
 };
-
 
 const notifyMerchantBuyerPaid = async (tradeId) => {
   const trade = await P2PTrade.findById(tradeId).lean();
@@ -64,29 +63,24 @@ const notifyMerchantBuyerPaid = async (tradeId) => {
   const mail = generateBuyerPaidMail({
     firstName: merchant.firstName,
     reference: trade.reference,
-    amount: trade.amountFiat
+    amount: trade.amountFiat,
   });
 
-  await sendMail(
-    merchant.email,
-    mail.subject,
-    mail.html,
-    mail.text
-  );
+  await sendMail(merchant.email, mail.subject, mail.html, mail.text);
 
   await P2PTrade.updateOne(
     { _id: tradeId },
-    { $set: { "notifications.buyerPaidNotified": true } }
+    { $set: { "notifications.buyerPaidNotified": true } },
   );
 
   global.io?.to(trade.merchantId.toString()).emit("trade:buyer_paid", {
     tradeId: trade._id,
-    reference: trade.reference
+    reference: trade.reference,
   });
 
   logger.info("Merchant notified: buyer paid", {
     tradeId,
-    reference: trade.reference
+    reference: trade.reference,
   });
 };
 
@@ -98,7 +92,7 @@ const notifyBuyerOfMerchantPayment = async (tradeId) => {
     firstName: trade.userId.firstName,
     reference: trade.reference,
     amount: trade.amountFiat,
-    currency: trade.currencySource
+    currency: trade.currencySource,
   });
 
   await sendMail(trade.userId.email, mail.subject, mail.html, mail.text);
@@ -106,7 +100,7 @@ const notifyBuyerOfMerchantPayment = async (tradeId) => {
   // Notify via Socket for real-time UI updates
   global.io?.to(trade.userId._id.toString()).emit("trade:merchant_paid", {
     reference: trade.reference,
-    message: "The merchant has marked the fiat payment as sent."
+    message: "The merchant has marked the fiat payment as sent.",
   });
 };
 
@@ -121,19 +115,14 @@ const notifyUserOfAdminResolution = async (tradeId, outcome) => {
     firstName: trade.userId.firstName,
     reference: trade.reference,
     outcome,
-    role: "user"
+    role: "user",
   });
 
-  await sendMail(
-    trade.userId.email,
-    mail.subject,
-    mail.html,
-    mail.text
-  );
+  await sendMail(trade.userId.email, mail.subject, mail.html, mail.text);
 
   global.io?.to(trade.userId._id.toString()).emit("trade:admin_resolved", {
     reference: trade.reference,
-    status: trade.status
+    status: trade.status,
   });
 };
 
@@ -148,22 +137,38 @@ const notifyMerchantOfAdminResolution = async (tradeId, outcome) => {
     firstName: trade.merchantId.firstName,
     reference: trade.reference,
     outcome,
-    role: "merchant"
+    role: "merchant",
   });
 
-  await sendMail(
-    trade.merchantId.email,
-    mail.subject,
-    mail.html,
-    mail.text
-  );
+  await sendMail(trade.merchantId.email, mail.subject, mail.html, mail.text);
 
   global.io?.to(trade.merchantId._id.toString()).emit("trade:admin_resolved", {
     reference: trade.reference,
-    status: trade.status
+    status: trade.status,
   });
 };
+const notifyUserOfCryptoRelease = async (tradeId) => {
+  const trade = await P2PTrade.findById(tradeId)
+    .populate("userId", "firstName email")
+    .lean();
 
+  if (!trade?.userId?.email) return;
 
-module.exports = { notifyMerchantOfTrade, notifyMerchantBuyerPaid, notifyBuyerOfMerchantPayment, notifyUserOfAdminResolution,
-  notifyMerchantOfAdminResolution};
+  const mail = generateCryptoReleaseMail({
+    firstName: trade.userId.firstName,
+    amount: trade.netCryptoAmount,
+    currency: trade.currencyTarget,
+    reference: trade.reference,
+  });
+
+  await sendMail(trade.userId.email, mail.subject, mail.html, mail.text);
+};
+
+module.exports = {
+  notifyMerchantOfTrade,
+  notifyMerchantBuyerPaid,
+  notifyBuyerOfMerchantPayment,
+  notifyUserOfAdminResolution,
+  notifyMerchantOfAdminResolution,
+  notifyUserOfCryptoRelease,
+};

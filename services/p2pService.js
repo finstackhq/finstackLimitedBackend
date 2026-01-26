@@ -18,6 +18,7 @@ const {
   notifyBuyerOfMerchantPayment,
   notifyUserOfAdminResolution,
   notifyMerchantOfAdminResolution,
+  notifyUserOfCryptoRelease,
 } = require("../utilities/notificationService");
 const { generateCryptoReleasedMail } = require("../utilities/mailGenerator");
 const { getFlatFee } = require("./adminFeeService");
@@ -933,7 +934,7 @@ module.exports = {
       });
 
       // 6. Notify Recipient (Async call after transaction success)
-      this.notifyRecipientOfRelease(finalTradeData).catch((err) =>
+      notifyUserOfCryptoRelease(finalTradeData._id).catch((err) =>
         console.error(
           "[EmailError] P2P Release notification failed:",
           err.message,
@@ -946,32 +947,6 @@ module.exports = {
       throw error;
     } finally {
       session.endSession();
-    }
-  },
-
-  // Helper method to handle the email sending logic
-  async notifyRecipientOfRelease(trade) {
-    try {
-      const recipientId =
-        trade.side === "BUY" ? trade.userId : trade.merchantId;
-      const recipient = await User.findById(recipientId);
-      if (!recipient || !recipient.email) return;
-
-      const html = generateCryptoReleasedMail({
-        firstName: recipient.firstName,
-        amount: trade.netCryptoAmount,
-        currency: trade.currencyTarget,
-        reference: trade.reference,
-      });
-
-      // Assuming your email utility is imported as 'sendEmail'
-      await sendEmail({
-        to: recipient.email,
-        subject: `Crypto Released! ${trade.netCryptoAmount} ${trade.currencyTarget} received`,
-        html: html,
-      });
-    } catch (err) {
-      console.error("Notification helper error:", err.message);
     }
   },
 
