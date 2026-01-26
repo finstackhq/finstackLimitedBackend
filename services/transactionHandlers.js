@@ -238,6 +238,8 @@ const Transaction = require("../models/transactionModel");
 const FeeLog = require("../models/feeLogModel");
 const Decimal = require("decimal.js");
 const { getFlatFee } = require("./adminFeeService");
+const P2PTrade = require("../models/p2pModel");
+const MASTER_WALLET_ID = process.env.BLOCKRADER_MASTER_WALLET_UUID;
 
 // async function handleDepositConfirmed(webhookPayload = {}) {
 //   if (webhookPayload.event !== "deposit.success") return null;
@@ -394,7 +396,6 @@ const { getFlatFee } = require("./adminFeeService");
 async function handleDepositConfirmed(webhookPayload = {}) {
   if (webhookPayload.event !== "deposit.success") return null;
 
-  // Fix: Blockradar nests details in 'data'
   const data = webhookPayload.data || webhookPayload.payload || {};
 
   const {
@@ -407,20 +408,40 @@ async function handleDepositConfirmed(webhookPayload = {}) {
     wallet: blockradarWallet,
   } = data;
 
-  // Validation
+  // 1. Basic Validation
   if (!externalTxId || !amountPaid || !reference) {
     console.warn("⚠️ Invalid Blockradar deposit payload", data);
     return null;
   }
 
-  // --- CURRENCY NORMALIZATION ---
+  // 2. Map Currencies (Ensures NGN -> CNGN mapping)
   let normalizedCurrency = currency.toUpperCase();
   if (normalizedCurrency === "USD") normalizedCurrency = "USDC";
-
-  // FIX: Explicitly mapping NGN from webhook to CNGN in your DB
   if (normalizedCurrency === "NGN") normalizedCurrency = "CNGN";
 
-  // 🔐 Idempotency check
+  // 3. ESCROW EXCEPTION: Handle Master Wallet (No DB lookup)
+  if (blockradarWallet?.id === MASTER_WALLET_ID) {
+    console.info(
+      `📦 Escrow Deposit Received for Master Wallet. Ref: ${reference}`,
+    );
+
+    if (reference && reference.includes("-ESCROW")) {
+      const p2pRef = reference.replace("-ESCROW", "");
+      await P2PTrade.findOneAndUpdate(
+        { reference: p2pRef },
+        {
+          $set: {
+            "metadata.escrowConfirmed": true,
+            "metadata.escrowTxId": externalTxId,
+          },
+        },
+      );
+      console.info(`✅ P2P Trade ${p2pRef} marked as Escrowed.`);
+    }
+    return { status: "ESCROW_SUCCESS", externalTxId };
+  }
+
+  // 4. 🔐 Normal User Deposit Idempotency check
   const alreadyProcessed = await Transaction.findOne({
     externalTxId,
     source: "BLOCKRADAR",
@@ -437,8 +458,7 @@ async function handleDepositConfirmed(webhookPayload = {}) {
   try {
     let wallet = null;
 
-    // --- WALLET LOOKUP ---
-    // This will now look for "CNGN" instead of "NGN"
+    // 5. Wallet Lookup
     if (blockradarWallet?.id) {
       wallet = await Wallet.findOne({
         externalWalletId: blockradarWallet.id,
@@ -457,31 +477,27 @@ async function handleDepositConfirmed(webhookPayload = {}) {
 
     if (!wallet) {
       throw new Error(
-        `Wallet not found for Blockradar deposit | extTx=${externalTxId} | Currency=${normalizedCurrency}`,
+        `Wallet not found for Blockradar deposit | extTx=${externalTxId}`,
       );
     }
 
     const grossAmount = new Decimal(amountPaid);
     const flatFeeValue = await getFlatFee("DEPOSIT", normalizedCurrency);
     const feeAmount = new Decimal(flatFeeValue || 0);
-
-    if (feeAmount.gt(grossAmount)) {
-      throw new Error("Deposit fee exceeds amount");
-    }
-
     const netAmount = grossAmount.minus(feeAmount);
 
-    // Credit wallet
+    // 6. Credit wallet
     await Wallet.updateOne(
       { _id: wallet._id },
       { $inc: { balance: Number(netAmount) } },
       { session },
     );
 
-    // Create transaction record
+    // 7. Create transaction record (WITH THE REQUIRED idempotencyKey)
     const [tx] = await Transaction.create(
       [
         {
+          idempotencyKey: `DEP-${externalTxId}`, // FIXES THE SCHEMA ERROR
           walletId: wallet._id,
           userId: wallet.user_id,
           externalTxId,
@@ -492,11 +508,7 @@ async function handleDepositConfirmed(webhookPayload = {}) {
           netAmount: Number(netAmount),
           currency: normalizedCurrency,
           status: "COMPLETED",
-          metadata: {
-            senderAddress,
-            recipientAddress,
-            rawWebhook: data,
-          },
+          metadata: { senderAddress, recipientAddress, rawWebhook: data },
           feeDetails: {
             platformFee: Number(feeAmount),
             totalFee: Number(feeAmount),
@@ -508,38 +520,16 @@ async function handleDepositConfirmed(webhookPayload = {}) {
       { session },
     );
 
-    if (feeAmount.gt(0)) {
-      await FeeLog.create(
-        [
-          {
-            userId: wallet.user_id,
-            transactionId: tx._id,
-            type: "DEPOSIT",
-            currency: normalizedCurrency,
-            grossAmount: Number(grossAmount),
-            feeAmount: Number(feeAmount),
-            platformFee: Number(feeAmount),
-            reference,
-            provider: "BLOCKRADAR",
-          },
-        ],
-        { session },
-      );
-    }
-
     await session.commitTransaction();
     session.endSession();
 
     console.info(
-      `✅ Deposit credited | ${netAmount.toString()} ${normalizedCurrency}`,
+      `✅ User Deposit credited | ${netAmount.toString()} ${normalizedCurrency}`,
     );
     return tx;
   } catch (err) {
-    if (session && session.hasEnded === false) {
-      await session.abortTransaction();
-    }
+    if (session && session.hasEnded === false) await session.abortTransaction();
     if (session) session.endSession();
-
     console.error("❌ Deposit failed:", err.message);
     throw err;
   }
