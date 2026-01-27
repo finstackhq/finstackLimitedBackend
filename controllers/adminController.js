@@ -50,121 +50,6 @@ const createAnnouncementAndSendMail = async (req, res) => {
   });
 };
 /* ===========  ADMIN: Get All Users   =========== */
-
-// const getAllUsers = async (req, res) => {
-//   try {
-//     if (req.user.role !== "admin") {
-//       return res.status(403).json({
-//         success: false,
-//         message: "Admin access required",
-//       });
-//     }
-
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 20;
-//     const skip = (page - 1) * limit;
-
-//     const matchStage = {};
-//     if (req.query.role) matchStage.role = req.query.role;
-//     if (req.query.isVerified)
-//       matchStage.isVerified = req.query.isVerified === "true";
-
-//     const users = await User.aggregate([
-//       { $match: matchStage },
-
-//       /* -------------------- KYC JOIN -------------------- */
-//       {
-//         $lookup: {
-//           from: "kycs",
-//           localField: "_id",
-//           foreignField: "user_id",
-//           as: "kyc",
-//         },
-//       },
-//       {
-//         $unwind: {
-//           path: "$kyc",
-//           preserveNullAndEmptyArrays: true,
-//         },
-//       },
-
-//       /* -------------------- WALLET JOIN -------------------- */
-//       {
-//         $lookup: {
-//           from: "wallets",
-//           let: { userId: "$_id" },
-//           pipeline: [
-//             {
-//               $match: {
-//                 $expr: {
-//                   $and: [
-//                     { $eq: ["$user_id", "$$userId"] },
-//                     { $eq: ["$walletType", "USER"] },
-//                     { $eq: ["$currency", "NGN"] },
-//                   ],
-//                 },
-//               },
-//             },
-//             {
-//               $project: {
-//                 balance: 1,
-//                 currency: 1,
-//                 status: 1,
-//               },
-//             },
-//           ],
-//           as: "wallet",
-//         },
-//       },
-//       {
-//         $unwind: {
-//           path: "$wallet",
-//           preserveNullAndEmptyArrays: true,
-//         },
-//       },
-
-//       /* -------------------- RESPONSE SHAPE -------------------- */
-//       {
-//         $project: {
-//           email: 1,
-//           role: 1,
-//           createdAt: 1,
-//           isVerified: 1,
-//           kycVerified: 1,
-
-//           country: "$kyc.country",
-//           kycStatus: "$kyc.status",
-
-//           balance: { $ifNull: ["$wallet.balance", 0] },
-//           walletStatus: { $ifNull: ["$wallet.status", "NOT_CREATED"] },
-//           currency: { $ifNull: ["$wallet.currency", "NGN"] },
-//         },
-//       },
-
-//       { $sort: { createdAt: -1 } },
-//       { $skip: skip },
-//       { $limit: limit },
-//     ]);
-
-//     const totalUsers = await User.countDocuments(matchStage);
-
-//     res.status(200).json({
-//       success: true,
-//       message: "Users fetched successfully",
-//       page,
-//       totalPages: Math.ceil(totalUsers / limit),
-//       totalUsers,
-//       users,
-//     });
-//   } catch (error) {
-//     console.error("Admin get users error:", error);
-//     res.status(500).json({
-//       success: false,
-//       message: "Internal server error",
-//     });
-//   }
-// };
-
 const getAllUsers = async (req, res) => {
   try {
     // ✅ Admin access check
@@ -200,7 +85,6 @@ const getAllUsers = async (req, res) => {
         },
       },
       { $unwind: { path: "$kyc", preserveNullAndEmptyArrays: true } },
-
       // Projection of basic fields + KYC
       {
         $project: {
@@ -237,8 +121,8 @@ const getAllUsers = async (req, res) => {
 
         return {
           ...user,
-          balances, // all wallets
-          totalBalance, // optional summary
+          balances,
+          totalBalance,
         };
       }),
     );
@@ -299,16 +183,13 @@ const getAllMerchants = async (req, res) => {
 const updateUserRole = async (req, res) => {
   try {
     const { userId, role } = req.body;
-
     // Validate input
     if (!userId || !role) {
       return res.status(400).json({ message: "User ID and role are required" });
     }
-
     if (!["user", "merchant", "admin"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
-
     // Find user and update role
     const updatedUser = await User.findByIdAndUpdate(
       userId,
@@ -328,7 +209,6 @@ const updateUserRole = async (req, res) => {
   }
 };
 // --------------------- Admin Updates KYC ---------------------
-
 const adminUpdateKycStatus = async (req, res) => {
   const { id: kycId, status, rejectionReason } = req.body;
   const normalizedStatus = status?.toUpperCase();
@@ -347,17 +227,13 @@ const adminUpdateKycStatus = async (req, res) => {
     if (!kycRecord) throw new Error("KYC record not found.");
 
     if (normalizedStatus === "APPROVED") {
-      /* --------------------------------
-     STEP 1: BLOCKRADER – Ensure Wallets Exist
-  -------------------------------- */
-
-      // 1️⃣ Get or create stablecoin addresses (USDC & CNGN)
+      /*  BLOCKRADER – Ensure Wallets Exist*/
+      //Get or create stablecoin addresses (USDC & CNGN)
       const { externalWalletId, cryptoAddress, accountName } =
         await getOrCreateStablecoinAddress(kycRecord.user_id);
 
       let ngnVirtualAccount = null;
-
-      // 2️⃣ For Nigerian users, ensure NGN virtual account exists
+      //For Nigerian users, ensure NGN virtual account exists
       if (kycRecord.country?.toLowerCase() === "nigeria") {
         ngnVirtualAccount = await createVirtualAccountIfMissing(
           kycRecord.user_id,
@@ -387,9 +263,7 @@ const adminUpdateKycStatus = async (req, res) => {
         }
       }
 
-      /* --------------------------------
-     STEP 2: MONGODB TRANSACTION – Save Wallet Records
-  -------------------------------- */
+      /* STEP 2: MONGODB TRANSACTION – Save Wallet Records */
       const session = await mongoose.startSession();
       session.startTransaction();
 
@@ -413,19 +287,6 @@ const adminUpdateKycStatus = async (req, res) => {
           accountName: `${accountName} - CNGN`,
           session,
         });
-
-        // NGN Wallet (only if virtual account was created)
-        // if (ngnVirtualAccount && !ngnVirtualAccount.fromExisting) {
-        //   await createWalletRecord({
-        //     userId: kycRecord.user_id._id,
-        //     currency: "NGN",
-        //     accountNumber: ngnVirtualAccount.accountNumber,
-        //     accountName: ngnVirtualAccount.accountName,
-        //     bankName: ngnVirtualAccount.bankName,
-        //     session,
-        //   });
-        // }
-
         // NGN Wallet (always save/update if virtual account exists)
         if (ngnVirtualAccount) {
           await createWalletRecord({
@@ -446,7 +307,10 @@ const adminUpdateKycStatus = async (req, res) => {
         // ✅ Update user KYC flag
         await User.findByIdAndUpdate(
           kycRecord.user_id._id,
-          { kycVerified: true },
+          {
+            kycVerified: true,
+            kycStatus: "VERIFIED",
+          },
           { session },
         );
 
@@ -481,6 +345,7 @@ const adminUpdateKycStatus = async (req, res) => {
 
       await User.findByIdAndUpdate(kycRecord.user_id._id, {
         kycVerified: false,
+        kycStatus: "REJECTED",
       });
 
       return res.status(200).json({
@@ -612,7 +477,6 @@ const getAllTransactions = async (req, res) => {
     if (userId) filter.userId = userId;
 
     // Fetch and populate related info
-    // 🛑 CRITICAL FIX 12: Corrected model name from 'transactionModel' to 'Transaction'
     const transactions = await Transaction.find(filter)
       .populate("userId", "name email")
       .populate("walletId", "accountNumber")
@@ -702,7 +566,7 @@ const setFee = async (req, res) => {
       currency,
       targetCurrency,
       feeAmount,
-      adminId, // Passing it to the service
+      adminId,
     });
 
     res.status(200).json({ success: true, data: result });
@@ -711,7 +575,7 @@ const setFee = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-// 🧾 Get all P2P trades (filters + pagination) Example: /api/admin/trades?status=COMPLETED&page=1&limit=10
+// Get all P2P trades (filters + pagination) Example: /api/admin/trades?status=COMPLETED&page=1&limit=10
 const getAllTrades = async (req, res) => {
   try {
     let {
@@ -859,42 +723,6 @@ const getFeeSummary = async (req, res) => {
     });
   }
 };
-// Update P2P FEES
-// const updateFlatFee = async (req, res) => {
-//   const { currency, flatFee } = req.body;
-
-//   if (!currency || flatFee === undefined) {
-//     return res.status(400).json({ message: "Currency and flatFee required" });
-//   }
-
-//   if (flatFee < 0) {
-//     return res.status(400).json({ message: "Flat fee cannot be negative" });
-//   }
-
-//   const existing = await FeeConfig.findOne({ currency });
-
-//   if (existing) {
-//     await FeeHistory.create({
-//       currency,
-//       oldFee: existing.flatFee,
-//       newFee: flatFee,
-//       updatedBy: req.user.id
-//     });
-
-//     existing.flatFee = flatFee;
-//     existing.updatedBy = req.user.id;
-//     await existing.save();
-//   } else {
-//     await FeeConfig.create({
-//       currency,
-//       flatFee,
-//       updatedBy: req.user.id
-//     });
-//   }
-
-//   res.json({ success: true, message: "Flat fee updated successfully" });
-// };
-
 // ========== ADMIN: Get Admin Dashboard Stats ========== */
 const getAdminDashboardStats = async (req, res) => {
   try {
