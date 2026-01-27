@@ -46,15 +46,48 @@ const ALLOWED_STATES = {
   CANCELLED_REVERSED: "CANCELLED_REVERSED",
 };
 // --------- Helpers ----------
-/** Helper to fetch a user and throw a standard error if not found.*/
+// async function checkUser(userId) {
+//   // Fetches user role for authorization checks and validates existence.
+//   const user = await User.findById(userId).select("role").lean();
+//   if (!user) {
+//     throw new TradeError("User not found.", 404);
+//   }
+//   return user;
+// }
+/** Helper to fetch a user and enforce KYC rules */
 async function checkUser(userId) {
-  // Fetches user role for authorization checks and validates existence.
-  const user = await User.findById(userId).select("role").lean();
+  const user = await User.findById(userId).select("role kycStatus").lean();
+
   if (!user) {
     throw new TradeError("User not found.", 404);
   }
+
+  // Explicit failure reasons (good UX)
+  if (user.kycStatus === "PENDING") {
+    throw new TradeError(
+      "Your KYC verification is still pending. Please wait for approval before trading.",
+      403,
+    );
+  }
+
+  if (user.kycStatus === "REJECTED") {
+    throw new TradeError(
+      "Your KYC verification was rejected. Please update your documents in settings.",
+      403,
+    );
+  }
+
+  // Single allow condition
+  if (user.kycStatus !== "VERIFIED") {
+    throw new TradeError(
+      "You must complete KYC verification before initiating a trade.",
+      403,
+    );
+  }
+
   return user;
 }
+
 /** Helper to log trade events. (This is now redundant but kept for initial trade creation)*/
 function safeLog(trade, logEntry) {
   console.log(`[TRADE_LOG] Ref: ${trade.reference} - ${logEntry.message}`);
@@ -242,10 +275,6 @@ module.exports = {
     // 1. Get and normalize the currencies
     const asset = normalize(currencyTarget); // e.g., 'CNGN'
     const localCurrency = normalize(currencySource); // e.g., 'RMB'
-
-    //   const feeValue = await getFlatFee("P2P", asset, localCurrency);
-    // // 3. Set the platform fee
-    //   const platformFeeCrypto = Number(feeValue);
 
     const feePerUnit = Number(await getFlatFee("P2P", asset, localCurrency));
 
