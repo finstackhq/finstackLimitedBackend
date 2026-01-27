@@ -367,6 +367,24 @@ module.exports = {
       trade = tradeDoc[0];
 
       // Log escrow transaction
+      // await Transaction.create(
+      //   [
+      //     {
+      //       userId: escrowSourceUserId,
+      //       walletId: await resolveWalletObjectId(
+      //         escrowSourceUserId,
+      //         currencyTarget,
+      //       ),
+      //       type: "ESCROW",
+      //       reference: escrowRef,
+      //       amount: cryptoAmount,
+      //       currency: currencyTarget,
+      //       externalTxId: escrowTxId,
+      //       status: "SUCCESS",
+      //     },
+      //   ],
+      //   { session },
+      // );
       await Transaction.create(
         [
           {
@@ -375,12 +393,14 @@ module.exports = {
               escrowSourceUserId,
               currencyTarget,
             ),
-            type: "ESCROW",
+            idempotencyKey: `P2P-ESCROW-${trade._id}`, // REQUIRED
+            type: "P2P_ESCROW", // ✅ valid enum
             reference: escrowRef,
             amount: cryptoAmount,
             currency: currencyTarget,
-            externalTxId: escrowTxId,
-            status: "SUCCESS",
+            externalTxId: escrowTxId, // optional mapping
+            status: "PENDING", // ✅ valid enum
+            metadata: { tradeId: trade._id, source: "BLOCKRADAR_ESCROW" }, // optional
           },
         ],
         { session },
