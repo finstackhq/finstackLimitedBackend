@@ -249,7 +249,8 @@ const submitPaycrestWithdrawal = async (req, res) => {
       });
     } // 2. Verify OTP
 
-    const isVerified = await verifyOtp(userId, otpCode, "WITHDRAWAL");
+    // const isVerified = await verifyOtp(userId, otpCode, "WITHDRAWAL");
+    const isVerified = await verifyOtp(userId, "WITHDRAWAL", otpCode);
     if (!isVerified)
       return res
         .status(401)
