@@ -21,10 +21,11 @@ const CRYPTO_NETWORK = process.env.PAYCREST_CRYPTO_NETWORK || "Base";
  * @param {string} idempotencyKey - Unique reference to prevent double processing.
  * @returns {Promise<Object>} Object containing the created transaction and Paycrest transfer details.
  */
+
 async function createWithdrawalRequest({
   userId,
-  currency, // The Crypto (cNGN)
-  fiatCurrency, // 👈 NEW: The Fiat (GHS, USD, NGN)
+  currency,
+  fiatCurrency,
   amount,
   externalAddress,
   idempotencyKey,
@@ -45,7 +46,7 @@ async function createWithdrawalRequest({
     );
   }
 
-  // --- Idempotency Check ---
+  // --- 1. Idempotency Check ---
   const existingTx = await Transaction.findOne({ reference: idempotencyKey });
   if (existingTx) {
     return {
@@ -64,26 +65,22 @@ async function createWithdrawalRequest({
   });
   if (!wallet) throw new Error("User wallet not found");
 
-  // --- Fee Calculation and Balance Check ---
+  // --- 2. Fee Calculation ---
   const flatFeeValue = await getFlatFee("WITHDRAWAL", currency);
   const feeAmount = new Decimal(flatFeeValue);
   const amtDecimal = new Decimal(amount);
+  // We calculate this for the logs, but we DON'T check it against the local DB balance anymore
   const totalDeduct = amtDecimal.plus(feeAmount).toDecimalPlaces(8);
 
-  const walletBalance = new Decimal(wallet.balance || 0);
-  if (walletBalance.lt(totalDeduct)) {
-    throw new Error("Insufficient balance for withdrawal including fee");
-  }
-
-  // --- PAYCREST STEP 1: Get Rate ---
+  // --- 3. PAYCREST STEP: Get Rate ---
   const rateData = await fetchPaycrestRate({
     token: currency,
     amount: Number(amount),
-    currency: fiatCurrency, // 👈 USE THE USER'S CHOSEN CURRENCY HERE
+    currency: fiatCurrency,
     network: CRYPTO_NETWORK,
   });
 
-  // --- PAYCREST STEP 2: Create Order ---
+  // --- 4. PAYCREST STEP: Create Order ---
   const recipient = {
     institution: institutionCode,
     accountIdentifier: externalAddress,
@@ -104,17 +101,13 @@ async function createWithdrawalRequest({
   const paycrestOrder = await createPaycrestOrder(orderPayload);
   const { id: paycrestOrderId, receiveAddress } = paycrestOrder;
 
-  // --- BEGIN ATOMIC DATABASE TRANSACTION (Critical Section) ---
+  // --- 5. DATABASE TRANSACTION ---
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const decTotal = Number(totalDeduct.toString());
-    await Wallet.updateOne(
-      { _id: wallet._id },
-      { $inc: { balance: -decTotal } },
-      { session },
-    );
+    // ❌ REMOVED: Wallet.updateOne ($inc balance)
+    // We don't deduct from local DB because the real money is moved via Blockradar API in the next step.
 
     const txDocs = await Transaction.create(
       [
@@ -124,7 +117,7 @@ async function createWithdrawalRequest({
           type: "WITHDRAWAL",
           amount: Number(amount),
           currency,
-          status: "PENDING_CRYPTO_TRANSFER", // Funds are locked, awaiting on-chain proof
+          status: "PENDING_CRYPTO_TRANSFER",
           reference: idempotencyKey,
           metadata: {
             destination: externalAddress,
