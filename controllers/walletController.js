@@ -10,8 +10,9 @@ const {
   createWithdrawalRequest,
 } = require("../services/withdrawalInterService");
 const { initiateCryptoTransfer } = require("../services/cryptoTransServicePc");
-const Transaction = require("../models/transactionModel"); // Needed for the non-atomic update
+const Transaction = require("../models/transactionModel");
 const { withdrawFromBlockrader } = require("../services/providers/blockrader");
+const crypto = require("crypto");
 // const blockradar = require("../services/providers/blockrader");
 
 const getDashboardBalances = async (req, res) => {
