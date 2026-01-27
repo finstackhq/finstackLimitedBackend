@@ -253,10 +253,9 @@ module.exports = {
     const currencySource = normalize(data.currencySource);
     const currencyTarget = normalize(data.currencyTarget);
 
-    // Validate time limit
-    if (!data.timeLimit || isNaN(data.timeLimit)) {
+    if (!data.timeLimit || isNaN(data.timeLimit))
       throw new TradeError("Merchant ad timeLimit is missing or invalid");
-    }
+
     const expiresAt = new Date(Date.now() + Number(data.timeLimit) * 60 * 1000);
 
     const fiatAmount = Number(data.amountSource);
@@ -265,115 +264,81 @@ module.exports = {
     if (fiatAmount > merchantAd.maxLimit)
       throw new TradeError("Amount exceeds maximum trade limit");
 
-    // Convert fiat → crypto
     const cryptoAmount = fiatAmount / merchantAd.price;
 
-    // Liquidity check
     if (cryptoAmount > merchantAd.availableAmount)
       throw new TradeError("Insufficient ad liquidity");
 
-    // 1. Get and normalize the currencies
-    const asset = normalize(currencyTarget); // e.g., 'CNGN'
-    const localCurrency = normalize(currencySource); // e.g., 'RMB'
+    const asset = normalize(currencyTarget);
+    const localCurrency = normalize(currencySource);
 
     const feePerUnit = Number(await getFlatFee("P2P", asset, localCurrency));
-
-    // Total fee = crypto amount × fee per unit
     const platformFeeCrypto = Number((cryptoAmount * feePerUnit).toFixed(8));
 
-    if (platformFeeCrypto < 0 || platformFeeCrypto >= cryptoAmount) {
+    if (platformFeeCrypto < 0 || platformFeeCrypto >= cryptoAmount)
       throw new TradeError("Invalid platform fee configuration.");
-    }
 
     const reference = data.reference || `P2P-${Date.now()}`;
 
-    // 🏦 1. FETCH BANK DETAILS (SNAPSHOT) BEFORE STARTING TRANSACTION
-    // Side SELL means the user is selling to a BUY ad (Merchant is buying)
-    const isUserSelling = merchantAd.type === "BUY";
+    // Bank snapshot
     let paymentSnapshot = null;
-
-    if (isUserSelling) {
-      // User is the one receiving Fiat, we need their primary bank
+    if (merchantAd.type === "BUY") {
       const primaryBank = await UserBankAccount.findOne({
         userId: buyerId,
         isPrimary: true,
         deletedAt: null,
       }).lean();
-
-      if (!primaryBank) {
+      if (!primaryBank)
         throw new TradeError(
-          "Please add and set a primary bank account in settings before selling.",
+          "Please add and set a primary bank account before selling.",
         );
-      }
-
-      paymentSnapshot = {
-        bankName: primaryBank.bankName,
-        accountNumber: primaryBank.accountNumber,
-        accountName: primaryBank.accountName,
-        bankCode: primaryBank.bankCode,
-      };
+      paymentSnapshot = { ...primaryBank };
     } else {
-      // Merchant is the one receiving Fiat (Merchant is selling crypto)
       const merchantBank = await UserBankAccount.findOne({
         userId: merchantAd.userId,
         isPrimary: true,
         deletedAt: null,
       }).lean();
-
-      paymentSnapshot = {
-        bankName: merchantBank?.bankName,
-        accountNumber: merchantBank?.accountNumber,
-        accountName: merchantBank?.accountName,
-        bankCode: merchantBank?.bankCode,
-      };
+      paymentSnapshot = { ...merchantBank };
     }
+
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let trade;
     try {
-      // Deduct ad liquidity atomically
-      const adUpdateResult = await MerchantAd.findOneAndUpdate(
+      // Deduct ad liquidity
+      const adUpdate = await MerchantAd.findOneAndUpdate(
         { _id: merchantAd._id, availableAmount: { $gte: cryptoAmount } },
         { $inc: { availableAmount: -cryptoAmount } },
         { new: true, session },
       );
-      if (!adUpdateResult)
-        throw new TradeError("Insufficient liquidity or merchant ad not found");
+      if (!adUpdate)
+        throw new TradeError("Insufficient liquidity or ad not found");
 
-      // Determine if merchant is buying → pre-escrow buyer crypto
-      const shouldPreEscrow = merchantAd.type === "BUY";
-      let escrowTxId = null;
+      // Determine escrow source
+      const isMerchantSelling = merchantAd.type === "SELL";
+      const escrowSourceUserId = isMerchantSelling
+        ? merchantAd.userId
+        : buyerId;
+      const sourceWalletId = await resolveUserWalletId(
+        escrowSourceUserId,
+        currencyTarget,
+      );
 
-      if (shouldPreEscrow) {
-        const escrowSourceUserId = buyerId; // Buyer owns crypto
-        const sourceWalletId = await resolveUserWalletId(
-          escrowSourceUserId,
-          currencyTarget,
-        );
-        const escrowAmount = cryptoAmount;
+      // 🔑 Escrow happens immediately
+      const escrowRef = `${reference}-ESCROW`;
+      const escrowTxResult = await blockrader.withdrawExternal(
+        sourceWalletId,
+        blockrader.ESCROW_DESTINATION_ADDRESS,
+        cryptoAmount,
+        currencyTarget,
+        escrowRef,
+      );
+      const escrowTxId = escrowTxResult?.data?.id || escrowTxResult?.txId;
+      if (!escrowTxId) throw new TradeError("Failed to escrow funds.", 500);
 
-        const transferResult = await blockrader.withdrawExternal(
-          sourceWalletId,
-          blockrader.ESCROW_DESTINATION_ADDRESS,
-          escrowAmount,
-          currencyTarget,
-          `${reference}-ESCROW`,
-        );
-
-        if (!transferResult)
-          throw new TradeError("Pre-escrow transfer failed at provider");
-
-        escrowTxId = transferResult?.data?.id || transferResult?.txId || "n/a";
-      }
-
-      const initialStatus = ALLOWED_STATES.INIT;
-      console.log("merchantAd fields:", {
-        price: merchantAd.price,
-        rawPrice: merchantAd.price,
-      });
-
-      // Create the trade
-      // 🏦 2. ATTACH THE SNAPSHOT TO THE TRADE CREATION
+      // Create trade
       const tradeDoc = await P2PTrade.create(
         [
           {
@@ -391,38 +356,46 @@ module.exports = {
             currencySource,
             currencyTarget,
             provider: "BLOCKRADAR",
-            status: initialStatus,
+            status: ALLOWED_STATES.INIT,
             expiresAt,
             escrowTxId,
-            // Pass the snapshot here
             paymentDetails: paymentSnapshot,
           },
         ],
         { session },
       );
-
       trade = tradeDoc[0];
 
-      safeLog(trade, {
-        message: shouldPreEscrow
-          ? `Trade created with pre-escrow. Crypto secured for merchant-buying trade. Tx: ${escrowTxId}`
-          : "Trade created. Awaiting buyer payment.",
-        actor: buyerId,
-        role: "buyer",
-        ip,
-        time: new Date(),
-      });
+      // Log escrow transaction
+      await Transaction.create(
+        [
+          {
+            userId: escrowSourceUserId,
+            walletId: await resolveWalletObjectId(
+              escrowSourceUserId,
+              currencyTarget,
+            ),
+            type: "ESCROW",
+            reference: escrowRef,
+            amount: cryptoAmount,
+            currency: currencyTarget,
+            externalTxId: escrowTxId,
+            status: "SUCCESS",
+          },
+        ],
+        { session },
+      );
 
       await session.commitTransaction();
 
       // Notify merchant asynchronously
       setImmediate(() => {
-        notifyMerchantOfTrade(trade._id).catch((err) => {
-          logger.error("Merchant trade notification failed", {
+        notifyMerchantOfTrade(trade._id).catch((err) =>
+          logger.error("Merchant notification failed", {
             tradeId: trade._id,
-            error: err.stack || err.message,
-          });
-        });
+            err,
+          }),
+        );
       });
     } catch (err) {
       await session.abortTransaction();
@@ -434,6 +407,251 @@ module.exports = {
     return await P2PTrade.findById(trade._id).lean();
   },
 
+  async confirmBuyerPayment(reference, buyerId, ip = null) {
+    if (!reference) throw new TradeError("Reference required");
+
+    const trade = await P2PTrade.findOne({ reference });
+    if (!trade) throw new TradeError("Trade not found", 404);
+
+    if (trade.userId.toString() !== buyerId.toString())
+      throw new TradeError("Only the buyer can confirm payment", 403);
+
+    if (trade.status === ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER)
+      return trade; // idempotent-safe
+
+    const validStatuses = [ALLOWED_STATES.INIT];
+    if (!validStatuses.includes(trade.status))
+      throw new TradeError(
+        `Cannot confirm payment in status: ${trade.status}`,
+        409,
+      );
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    let updatedTrade;
+    try {
+      updatedTrade = await updateTradeStatusAndLogSafe(
+        trade._id,
+        ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
+        {
+          message: "Buyer confirmed payment.",
+          actor: buyerId,
+          role: "buyer",
+          ip,
+        },
+        trade.status,
+        session,
+      );
+
+      await session.commitTransaction();
+    } catch (err) {
+      if (session.inTransaction()) await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
+    }
+
+    // Notify merchant asynchronously
+    setImmediate(() => {
+      notifyMerchantBuyerPaid(trade._id).catch((err) =>
+        logger.error("Merchant notification failed", {
+          tradeId: trade._id,
+          err,
+        }),
+      );
+    });
+
+    return updatedTrade;
+  },
+  // async initiateTrade(buyerId, merchantAd, data, ip = null) {
+  //   await checkUser(buyerId);
+  //   await checkUser(merchantAd.userId);
+
+  //   const currencySource = normalize(data.currencySource);
+  //   const currencyTarget = normalize(data.currencyTarget);
+
+  //   // Validate time limit
+  //   if (!data.timeLimit || isNaN(data.timeLimit)) {
+  //     throw new TradeError("Merchant ad timeLimit is missing or invalid");
+  //   }
+  //   const expiresAt = new Date(Date.now() + Number(data.timeLimit) * 60 * 1000);
+
+  //   const fiatAmount = Number(data.amountSource);
+  //   if (fiatAmount < merchantAd.minLimit)
+  //     throw new TradeError("Amount below minimum trade limit");
+  //   if (fiatAmount > merchantAd.maxLimit)
+  //     throw new TradeError("Amount exceeds maximum trade limit");
+
+  //   // Convert fiat → crypto
+  //   const cryptoAmount = fiatAmount / merchantAd.price;
+
+  //   // Liquidity check
+  //   if (cryptoAmount > merchantAd.availableAmount)
+  //     throw new TradeError("Insufficient ad liquidity");
+
+  //   // 1. Get and normalize the currencies
+  //   const asset = normalize(currencyTarget); // e.g., 'CNGN'
+  //   const localCurrency = normalize(currencySource); // e.g., 'RMB'
+
+  //   const feePerUnit = Number(await getFlatFee("P2P", asset, localCurrency));
+
+  //   // Total fee = crypto amount × fee per unit
+  //   const platformFeeCrypto = Number((cryptoAmount * feePerUnit).toFixed(8));
+
+  //   if (platformFeeCrypto < 0 || platformFeeCrypto >= cryptoAmount) {
+  //     throw new TradeError("Invalid platform fee configuration.");
+  //   }
+
+  //   const reference = data.reference || `P2P-${Date.now()}`;
+
+  //   // 🏦 1. FETCH BANK DETAILS (SNAPSHOT) BEFORE STARTING TRANSACTION
+  //   // Side SELL means the user is selling to a BUY ad (Merchant is buying)
+  //   const isUserSelling = merchantAd.type === "BUY";
+  //   let paymentSnapshot = null;
+
+  //   if (isUserSelling) {
+  //     // User is the one receiving Fiat, we need their primary bank
+  //     const primaryBank = await UserBankAccount.findOne({
+  //       userId: buyerId,
+  //       isPrimary: true,
+  //       deletedAt: null,
+  //     }).lean();
+
+  //     if (!primaryBank) {
+  //       throw new TradeError(
+  //         "Please add and set a primary bank account in settings before selling.",
+  //       );
+  //     }
+
+  //     paymentSnapshot = {
+  //       bankName: primaryBank.bankName,
+  //       accountNumber: primaryBank.accountNumber,
+  //       accountName: primaryBank.accountName,
+  //       bankCode: primaryBank.bankCode,
+  //     };
+  //   } else {
+  //     // Merchant is the one receiving Fiat (Merchant is selling crypto)
+  //     const merchantBank = await UserBankAccount.findOne({
+  //       userId: merchantAd.userId,
+  //       isPrimary: true,
+  //       deletedAt: null,
+  //     }).lean();
+
+  //     paymentSnapshot = {
+  //       bankName: merchantBank?.bankName,
+  //       accountNumber: merchantBank?.accountNumber,
+  //       accountName: merchantBank?.accountName,
+  //       bankCode: merchantBank?.bankCode,
+  //     };
+  //   }
+  //   const session = await mongoose.startSession();
+  //   session.startTransaction();
+  //   let trade;
+  //   try {
+  //     // Deduct ad liquidity atomically
+  //     const adUpdateResult = await MerchantAd.findOneAndUpdate(
+  //       { _id: merchantAd._id, availableAmount: { $gte: cryptoAmount } },
+  //       { $inc: { availableAmount: -cryptoAmount } },
+  //       { new: true, session },
+  //     );
+  //     if (!adUpdateResult)
+  //       throw new TradeError("Insufficient liquidity or merchant ad not found");
+
+  //     // Determine if merchant is buying → pre-escrow buyer crypto
+  //     const shouldPreEscrow = merchantAd.type === "BUY";
+  //     let escrowTxId = null;
+
+  //     if (shouldPreEscrow) {
+  //       const escrowSourceUserId = buyerId; // Buyer owns crypto
+  //       const sourceWalletId = await resolveUserWalletId(
+  //         escrowSourceUserId,
+  //         currencyTarget,
+  //       );
+  //       const escrowAmount = cryptoAmount;
+
+  //       const transferResult = await blockrader.withdrawExternal(
+  //         sourceWalletId,
+  //         blockrader.ESCROW_DESTINATION_ADDRESS,
+  //         escrowAmount,
+  //         currencyTarget,
+  //         `${reference}-ESCROW`,
+  //       );
+
+  //       if (!transferResult)
+  //         throw new TradeError("Pre-escrow transfer failed at provider");
+
+  //       escrowTxId = transferResult?.data?.id || transferResult?.txId || "n/a";
+  //     }
+
+  //     const initialStatus = ALLOWED_STATES.INIT;
+  //     console.log("merchantAd fields:", {
+  //       price: merchantAd.price,
+  //       rawPrice: merchantAd.price,
+  //     });
+
+  //     // Create the trade
+  //     // 🏦 2. ATTACH THE SNAPSHOT TO THE TRADE CREATION
+  //     const tradeDoc = await P2PTrade.create(
+  //       [
+  //         {
+  //           reference,
+  //           userId: buyerId,
+  //           merchantId: merchantAd.userId,
+  //           merchantAdId: merchantAd._id,
+  //           side: merchantAd.type === "SELL" ? "BUY" : "SELL",
+  //           amountFiat: fiatAmount,
+  //           amountCrypto: cryptoAmount,
+  //           platformFeeCrypto,
+  //           netCryptoAmount: cryptoAmount - platformFeeCrypto,
+  //           marketRate: merchantAd.price,
+  //           listingRate: merchantAd.price,
+  //           currencySource,
+  //           currencyTarget,
+  //           provider: "BLOCKRADAR",
+  //           status: initialStatus,
+  //           expiresAt,
+  //           escrowTxId,
+  //           // Pass the snapshot here
+  //           paymentDetails: paymentSnapshot,
+  //         },
+  //       ],
+  //       { session },
+  //     );
+
+  //     trade = tradeDoc[0];
+
+  //     safeLog(trade, {
+  //       message: shouldPreEscrow
+  //         ? `Trade created with pre-escrow. Crypto secured for merchant-buying trade. Tx: ${escrowTxId}`
+  //         : "Trade created. Awaiting buyer payment.",
+  //       actor: buyerId,
+  //       role: "buyer",
+  //       ip,
+  //       time: new Date(),
+  //     });
+
+  //     await session.commitTransaction();
+
+  //     // Notify merchant asynchronously
+  //     setImmediate(() => {
+  //       notifyMerchantOfTrade(trade._id).catch((err) => {
+  //         logger.error("Merchant trade notification failed", {
+  //           tradeId: trade._id,
+  //           error: err.stack || err.message,
+  //         });
+  //       });
+  //     });
+  //   } catch (err) {
+  //     await session.abortTransaction();
+  //     throw err;
+  //   } finally {
+  //     session.endSession();
+  //   }
+
+  //   return await P2PTrade.findById(trade._id).lean();
+  // },
+
   // async confirmBuyerPayment(reference, buyerId, ip = null) {
   //   if (!reference) throw new TradeError("Reference required");
 
@@ -444,9 +662,7 @@ module.exports = {
   //     throw new TradeError("Only the buyer can confirm payment", 403);
   //   }
 
-  //   // If it failed before, you might need to manually reset it in the DB to test again,
-  //   // but here we check for the valid starting states.
-  //   const validStatuses = [ALLOWED_STATES.INIT, ALLOWED_STATES.MERCHANT_PAID];
+  //   const validStatuses = ["INIT", "MERCHANT_PAID", "PENDING_PAYMENT"];
   //   if (!validStatuses.includes(trade.status)) {
   //     throw new TradeError(
   //       `Cannot confirm payment in status: ${trade.status}`,
@@ -462,19 +678,20 @@ module.exports = {
   //   );
   //   const escrowAmount = trade.amountCrypto;
 
-  //   // Create the exact reference string used for the withdrawal
   //   const escrowRef = `${trade.reference}-ESCROW`;
+
+  //   // ✅ STABLE KEY: This prevents double-charging if the user clicks twice
+  //   const escrowIdempotencyKey = `P2P-ESCROW-INIT-${trade._id}`;
 
   //   const session = await mongoose.startSession();
   //   session.startTransaction();
 
   //   try {
-  //     // 1️⃣ SAVE TO DB FIRST
-  //     // Added idempotencyKey to satisfy your Schema requirement
+  //     // 1️⃣ Create "PENDING" Withdrawal record locally
   //     await Transaction.create(
   //       [
   //         {
-  //           idempotencyKey: `P2P-ESCROW-${trade._id}-${Date.now()}`,
+  //           idempotencyKey: escrowIdempotencyKey,
   //           reference: escrowRef,
   //           userId: escrowSourceUserId,
   //           walletId: await resolveWalletObjectId(
@@ -485,17 +702,16 @@ module.exports = {
   //           currency: trade.currencyTarget,
   //           type: "WITHDRAWAL",
   //           status: "PENDING",
-  //           source: "BLOCKRADAR",
   //           metadata: { p2pTradeId: trade._id },
   //         },
   //       ],
   //       { session },
   //     );
 
-  //     // Update trade status
+  //     // 2️⃣ Update trade status
   //     const updatedTrade = await updateTradeStatusAndLogSafe(
   //       trade._id,
-  //       ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER,
+  //       "PAYMENT_CONFIRMED_BY_BUYER",
   //       {
   //         message: `Buyer confirmed payment. Initiating escrow.`,
   //         actor: buyerId,
@@ -506,40 +722,39 @@ module.exports = {
   //       session,
   //     );
 
-  //     // Commit local DB changes before hitting the external API
   //     await session.commitTransaction();
   //     session.endSession();
 
-  //     // 2️⃣ THEN CALL BLOCKRADAR
+  //     // 3️⃣ Call Blockradar with the SAME idempotency key
   //     const transferResult = await blockrader.withdrawExternal(
   //       sourceWalletId,
   //       blockrader.ESCROW_DESTINATION_ADDRESS,
   //       escrowAmount,
   //       trade.currencyTarget,
   //       escrowRef,
+  //       escrowIdempotencyKey, // 🔑 Vital for preventing double withdrawals
   //     );
 
   //     if (!transferResult) {
   //       throw new TradeError("Escrow transfer failed at provider");
   //     }
 
-  //     const tradeId = trade._id;
+  //     // 4️⃣ Async notification
   //     setImmediate(() => {
-  //       notifyMerchantBuyerPaid(tradeId).catch((err) =>
-  //         logger.error("Merchant notification failed", err),
+  //       notifyMerchantBuyerPaid(trade._id).catch((err) =>
+  //         console.error("Merchant notification failed", err),
   //       );
   //     });
 
   //     await redisClient.del(`balances:${escrowSourceUserId}`);
+
   //     return updatedTrade;
   //   } catch (error) {
-  //     if (session && !session.hasEnded) {
-  //       await session.abortTransaction();
-  //     }
+  //     if (session.inTransaction()) await session.abortTransaction();
   //     session.endSession();
 
-  //     // Log the failure so we know why it failed
-  //     await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
+  //     // Update trade status as failed so merchant/buyer knows why it stopped
+  //     await updateTradeStatusAndLogSafe(trade._id, "FAILED", {
   //       message: `confirmBuyerPayment failed: ${error.message}`,
   //       role: "system",
   //       ip,
@@ -547,117 +762,6 @@ module.exports = {
   //     throw error;
   //   }
   // },
-
-  async confirmBuyerPayment(reference, buyerId, ip = null) {
-    if (!reference) throw new TradeError("Reference required");
-
-    const trade = await P2PTrade.findOne({ reference });
-    if (!trade) throw new TradeError("Trade not found", 404);
-
-    if (trade.userId.toString() !== buyerId.toString()) {
-      throw new TradeError("Only the buyer can confirm payment", 403);
-    }
-
-    const validStatuses = ["INIT", "MERCHANT_PAID", "PENDING_PAYMENT"];
-    if (!validStatuses.includes(trade.status)) {
-      throw new TradeError(
-        `Cannot confirm payment in status: ${trade.status}`,
-        409,
-      );
-    }
-
-    const escrowSourceUserId =
-      trade.side === "BUY" ? trade.merchantId : trade.userId;
-    const sourceWalletId = await resolveUserWalletId(
-      escrowSourceUserId,
-      trade.currencyTarget,
-    );
-    const escrowAmount = trade.amountCrypto;
-
-    const escrowRef = `${trade.reference}-ESCROW`;
-
-    // ✅ STABLE KEY: This prevents double-charging if the user clicks twice
-    const escrowIdempotencyKey = `P2P-ESCROW-INIT-${trade._id}`;
-
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      // 1️⃣ Create "PENDING" Withdrawal record locally
-      await Transaction.create(
-        [
-          {
-            idempotencyKey: escrowIdempotencyKey,
-            reference: escrowRef,
-            userId: escrowSourceUserId,
-            walletId: await resolveWalletObjectId(
-              escrowSourceUserId,
-              trade.currencyTarget,
-            ),
-            amount: trade.amountCrypto,
-            currency: trade.currencyTarget,
-            type: "WITHDRAWAL",
-            status: "PENDING",
-            metadata: { p2pTradeId: trade._id },
-          },
-        ],
-        { session },
-      );
-
-      // 2️⃣ Update trade status
-      const updatedTrade = await updateTradeStatusAndLogSafe(
-        trade._id,
-        "PAYMENT_CONFIRMED_BY_BUYER",
-        {
-          message: `Buyer confirmed payment. Initiating escrow.`,
-          actor: buyerId,
-          role: "buyer",
-          ip,
-        },
-        trade.status,
-        session,
-      );
-
-      await session.commitTransaction();
-      session.endSession();
-
-      // 3️⃣ Call Blockradar with the SAME idempotency key
-      const transferResult = await blockrader.withdrawExternal(
-        sourceWalletId,
-        blockrader.ESCROW_DESTINATION_ADDRESS,
-        escrowAmount,
-        trade.currencyTarget,
-        escrowRef,
-        escrowIdempotencyKey, // 🔑 Vital for preventing double withdrawals
-      );
-
-      if (!transferResult) {
-        throw new TradeError("Escrow transfer failed at provider");
-      }
-
-      // 4️⃣ Async notification
-      setImmediate(() => {
-        notifyMerchantBuyerPaid(trade._id).catch((err) =>
-          console.error("Merchant notification failed", err),
-        );
-      });
-
-      await redisClient.del(`balances:${escrowSourceUserId}`);
-
-      return updatedTrade;
-    } catch (error) {
-      if (session.inTransaction()) await session.abortTransaction();
-      session.endSession();
-
-      // Update trade status as failed so merchant/buyer knows why it stopped
-      await updateTradeStatusAndLogSafe(trade._id, "FAILED", {
-        message: `confirmBuyerPayment failed: ${error.message}`,
-        role: "system",
-        ip,
-      });
-      throw error;
-    }
-  },
 
   async merchantMarksFiatSent(reference, merchantId, ip = null) {
     if (!reference) throw new TradeError("Reference required");
