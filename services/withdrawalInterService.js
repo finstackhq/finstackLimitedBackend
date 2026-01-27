@@ -67,7 +67,8 @@ async function createWithdrawalRequest({
   // --- Fee Calculation and Balance Check ---
   const flatFeeValue = await getFlatFee("WITHDRAWAL", currency);
   const feeAmount = new Decimal(flatFeeValue);
-  const totalDeduct = amt.plus(feeAmount).toDecimalPlaces(8);
+  const amtDecimal = new Decimal(amount);
+  const totalDeduct = amtDecimal.plus(feeAmount).toDecimalPlaces(8);
 
   const walletBalance = new Decimal(wallet.balance || 0);
   if (walletBalance.lt(totalDeduct)) {
@@ -77,7 +78,7 @@ async function createWithdrawalRequest({
   // --- PAYCREST STEP 1: Get Rate ---
   const rateData = await fetchPaycrestRate({
     token: currency,
-    amount: amt.toNumber(),
+    amount: Number(amount),
     currency: fiatCurrency, // 👈 USE THE USER'S CHOSEN CURRENCY HERE
     network: CRYPTO_NETWORK,
   });
@@ -91,7 +92,7 @@ async function createWithdrawalRequest({
   };
 
   const orderPayload = {
-    amount: amt.toNumber(),
+    amount: Number(amount),
     token: currency,
     rate: rateData.rate,
     recipient: recipient,
@@ -121,7 +122,7 @@ async function createWithdrawalRequest({
           walletId: wallet._id,
           userId,
           type: "WITHDRAWAL",
-          amount: Number(amt.toString()),
+          amount: Number(amount),
           currency,
           status: "PENDING_CRYPTO_TRANSFER", // Funds are locked, awaiting on-chain proof
           reference: idempotencyKey,
@@ -155,7 +156,7 @@ async function createWithdrawalRequest({
           transactionId: tx._id,
           type: "WITHDRAWAL",
           currency,
-          grossAmount: Number(amount.toString()),
+          grossAmount: Number(amount),
           feeAmount: Number(feeAmount.toString()),
           platformFee: Number(feeAmount.toString()),
           networkFee: 0,
@@ -173,7 +174,7 @@ async function createWithdrawalRequest({
       transaction: tx,
       paycrestOrderId,
       paycrestReceiveAddress: receiveAddress,
-      cryptoAmountToSend: amt.toNumber(),
+      cryptoAmountToSend: Number(amount),
     };
   } catch (err) {
     await session.abortTransaction();
