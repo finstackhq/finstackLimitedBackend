@@ -260,26 +260,6 @@ const cancelTrade = async (req, res) => {
     handleServiceError(res, error);
   }
 };
-// const cancelTrade = async (req, res) => {
-//   try {
-//     const userId = req.user.id;
-//     const { reference } = req.params;
-//     const ip = req.ip;
-
-//     if (!reference) {
-//       return handleServiceError(res, new Error("Trade reference is required in the URL path."));
-//     }
-
-//     const trade = await p2pService.cancelTrade(reference, userId, ip);
-
-//     res.status(200).json({
-//       message: `Trade cancelled successfully. Status: ${trade.status}`,
-//       data: trade,
-//     });
-//   } catch (error) {
-//     handleServiceError(res, error);
-//   }
-// }
 
 const merchantMarkPaid = async (req, res) => {
   try {
@@ -388,7 +368,73 @@ const getTradeDetails = async (req, res) => {
   }
 };
 
+// const openDispute = async (req, res) => {
+//   try {
+//     const { reference } = req.params;
+//     const userId = req.user.id;
+//     const ip = req.ip;
+
+//     // Extract reason and optional evidenceUrl from body
+//     const { reason, evidenceUrl } = req.body;
+
+//     if (!reason) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "A reason is required to open a dispute.",
+//       });
+//     }
+
+//     const trade = await p2pService.openDispute(
+//       reference,
+//       userId,
+//       { reason, evidenceUrl },
+//       ip,
+//     );
+
+//     res.status(200).json({
+//       success: true,
+//       message: "Dispute opened successfully. An admin has been notified.",
+//       data: trade,
+//     });
+//   } catch (error) {
+//     handleServiceError(res, error);
+//   }
+// };
+
 // Helper
+const openDispute = async (req, res) => {
+  try {
+    const { reference } = req.params;
+    const userId = req.user.id;
+    const { reason } = req.body;
+
+    // ✅ Get the URL from the Multer/Cloudinary file object
+    const evidenceUrl = req.file ? req.file.path : null;
+
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: "A reason is required to open a dispute.",
+      });
+    }
+
+    const trade = await p2pService.openDispute(
+      reference,
+      userId,
+      { reason, evidenceUrl },
+      req.ip,
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Dispute opened successfully. An admin has been notified.",
+      data: trade,
+    });
+  } catch (error) {
+    handleServiceError(res, error);
+  }
+};
+
 function maskEmail(email) {
   if (!email) return "";
   const [name, domain] = email.split("@");
@@ -403,6 +449,7 @@ module.exports = {
   cancelTrade,
   createUsdWallet,
   merchantMarkPaid,
+  openDispute,
   adminResolveTrade,
   getAllDisputes,
   getTradeDetails,

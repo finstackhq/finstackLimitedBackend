@@ -135,6 +135,24 @@ const P2PTradeSchema = new mongoose.Schema(
       index: true,
     },
 
+    disputeDetails: {
+      openedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      reason: { type: String },
+      evidence: [
+        {
+          url: String,
+          uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      adminNotes: { type: String },
+      resolution: {
+        type: String,
+        enum: ["RELEASE_TO_BUYER", "RETURN_TO_MERCHANT", "CANCELLED"],
+      },
+      resolvedAt: { type: Date },
+    },
+
     notifications: {
       merchantNotified: {
         type: Boolean,
@@ -146,6 +164,7 @@ const P2PTradeSchema = new mongoose.Schema(
         default: false,
         index: true,
       },
+
       // disputeNotified: {
       //   type: Boolean,
       //   default: false,

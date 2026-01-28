@@ -1,4 +1,3 @@
-// utilities/fileUpload.js
 const multer = require("multer");
 const { v2: cloudinary } = require("cloudinary");
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
@@ -16,8 +15,13 @@ const storage = new CloudinaryStorage({
   cloudinary,
   params: async (req, file) => {
     let folder = "kyc/others";
+    if (file.fieldname === "evidence") folder = "p2p/disputes";
     if (file.fieldname === "selfie") folder = "kyc/selfies";
-    if (file.fieldname === "proof_id_front" || file.fieldname === "proof_id_back") folder = "kyc/ids";
+    if (
+      file.fieldname === "proof_id_front" ||
+      file.fieldname === "proof_id_back"
+    )
+      folder = "kyc/ids";
     if (file.fieldname === "proof_address") folder = "kyc/addresses";
 
     return {
@@ -31,14 +35,16 @@ const storage = new CloudinaryStorage({
 
 // File filter
 function fileFilter(_req, file, cb) {
-  const imageFields = ["selfie", "proof_id_front", "proof_id_back"];
+  const imageFields = ["selfie", "proof_id_front", "proof_id_back", "evidence"];
   if (imageFields.includes(file.fieldname)) {
-    if (["image/jpeg", "image/png"].includes(file.mimetype)) return cb(null, true);
+    if (["image/jpeg", "image/png"].includes(file.mimetype))
+      return cb(null, true);
     return cb(new Error("Only JPG/PNG images allowed for selfies and ID"));
   }
 
   if (file.fieldname === "proof_address") {
-    if (["image/jpeg", "image/png", "application/pdf"].includes(file.mimetype)) return cb(null, true);
+    if (["image/jpeg", "image/png", "application/pdf"].includes(file.mimetype))
+      return cb(null, true);
     return cb(new Error("Only JPG, PNG, or PDF allowed for proof of address"));
   }
 
@@ -64,7 +70,8 @@ function uploadFile(options = {}) {
 
 // Error handler
 function uploadErrorHandler(err, req, res, next) {
-  if (err instanceof multer.MulterError) return res.status(400).json({ message: `Upload error: ${err.message}` });
+  if (err instanceof multer.MulterError)
+    return res.status(400).json({ message: `Upload error: ${err.message}` });
   if (err) return res.status(400).json({ message: err.message });
   next();
 }

@@ -687,175 +687,6 @@ module.exports = {
       session.endSession();
     }
   },
-
-  // async cancelTrade(reference, userId, ip = null) {
-  //   if (!reference) throw new TradeError("Reference required");
-
-  //   const trade = await P2PTrade.findOne({ reference });
-  //   if (!trade) throw new TradeError("Trade not found", 404);
-
-  //   const user = await checkUser(userId);
-  //   const isAdmin = user.role === "admin";
-  //   const isBuyer = trade.userId.toString() === userId.toString();
-  //   const isMerchant = trade.merchantId.toString() === userId.toString();
-
-  //   // ----------------------------
-  //   // 1️⃣ Authorization check
-  //   // Buyer or Admin can cancel anytime.
-  //   // Merchant can only cancel after trade expires.
-  //   // ----------------------------
-  //   if (isMerchant && !isAdmin) {
-  //     const isExpired = new Date() > new Date(trade.expiresAt);
-  //     if (!isExpired) {
-  //       throw new TradeError(
-  //         "Merchant cannot cancel while trade is active. Wait for expiration or open a dispute.",
-  //         403,
-  //       );
-  //     }
-  //   } else if (!isBuyer && !isAdmin) {
-  //     throw new TradeError("Not authorized to cancel this trade", 403);
-  //   }
-
-  //   // ----------------------------
-  //   // 2️⃣ Terminal states
-  //   // ----------------------------
-  //   const terminalStates = [
-  //     ALLOWED_STATES.COMPLETED,
-  //     ALLOWED_STATES.CANCELLED,
-  //     ALLOWED_STATES.CANCELLED_REVERSED,
-  //     ALLOWED_STATES.FAILED,
-  //   ];
-  //   if (terminalStates.includes(trade.status)) {
-  //     throw new TradeError(
-  //       `Trade is already in a final state: ${trade.status}`,
-  //       409,
-  //     );
-  //   }
-
-  //   const requiresEscrowReversal =
-  //     trade.status === ALLOWED_STATES.PAYMENT_CONFIRMED_BY_BUYER;
-  //   let reversalTxId = null;
-
-  //   try {
-  //     // ----------------------------
-  //     // 3️⃣ Handle Escrow Reversal
-  //     // - Scenario B (User sells)
-  //     // - Full gross amount
-  //     // ----------------------------
-  //     if (requiresEscrowReversal) {
-  //       const refundRecipientId =
-  //         trade.side === "BUY" ? trade.merchantId : trade.userId;
-  //       const sourceCurrency = trade.currencyTarget;
-
-  //       // Full gross escrow includes platform fee
-  //       const refundAmount = trade.amountCrypto;
-
-  //       const destinationWalletId = await resolveUserWalletId(
-  //         refundRecipientId,
-  //         sourceCurrency,
-  //       );
-  //       const destinationAddress = await resolveUserCryptoAddress(
-  //         refundRecipientId,
-  //         sourceCurrency,
-  //       );
-
-  //       const transferResult = await blockrader.transferFunds(
-  //         blockrader.BLOCKRADER_MASTER_WALLET_UUID,
-  //         destinationWalletId,
-  //         refundAmount,
-  //         sourceCurrency,
-  //         destinationAddress,
-  //         `${trade.reference}-REVERSAL`,
-  //       );
-
-  //       if (!transferResult)
-  //         throw new TradeError("Escrow reversal failed at provider");
-  //       reversalTxId =
-  //         transferResult?.data?.id || transferResult?.txId || "n/a";
-  //     }
-
-  //     // ----------------------------
-  //     // 4️⃣ Atomic DB operations
-  //     // ----------------------------
-  //     const session = await mongoose.startSession();
-  //     session.startTransaction();
-  //     try {
-  //       // Restore merchant ad liquidity
-  //       await MerchantAd.findByIdAndUpdate(
-  //         trade.merchantAdId,
-  //         { $inc: { availableAmount: trade.amountCrypto } },
-  //         { session },
-  //       );
-
-  //       const newStatus = requiresEscrowReversal
-  //         ? ALLOWED_STATES.CANCELLED_REVERSED
-  //         : ALLOWED_STATES.CANCELLED;
-
-  //       const updatedTrade = await updateTradeStatusAndLogSafe(
-  //         trade._id,
-  //         newStatus,
-  //         {
-  //           message: `Cancelled by ${
-  //             isAdmin ? "Admin" : isBuyer ? "Buyer" : "Merchant"
-  //           }. ${reversalTxId ? `Escrow reversed (tx: ${reversalTxId})` : ""}`,
-  //           actor: userId,
-  //           role: isAdmin ? "admin" : isBuyer ? "buyer" : "merchant",
-  //           ip,
-  //         },
-  //         trade.status,
-  //         session,
-  //       );
-
-  //       // 🔑 ADD: REFUND LEDGER
-  //       if (requiresEscrowReversal) {
-  //         await createIdempotentTransaction(
-  //           {
-  //             idempotencyKey: `P2P:${trade._id}:REFUND`,
-  //             walletId: await resolveWalletObjectId(
-  //               refundRecipientId,
-  //               trade.currencyTarget,
-  //             ),
-  //             userId: refundRecipientId,
-  //             type: "P2P_REFUND",
-  //             amount: trade.amountCrypto, // 🟢 CREDIT
-  //             currency: trade.currencyTarget,
-  //             status: "COMPLETED",
-  //             reference: trade.reference,
-  //             metadata: { p2pTradeId: trade._id },
-  //           },
-  //           session,
-  //         );
-  //       }
-
-  //       await session.commitTransaction();
-
-  //       // Invalidate caches for both buyer and merchant
-  //       await redisClient.del(`balances:${trade.merchantId}`);
-  //       await redisClient.del(`balances:${trade.userId}`);
-
-  //       return updatedTrade;
-  //     } catch (dbError) {
-  //       await session.abortTransaction();
-  //       console.error(
-  //         `DATABASE CRASH after reversal sent: ${reversalTxId}. Manual sync may be required for trade ${trade.reference}`,
-  //       );
-  //       throw dbError;
-  //     } finally {
-  //       session.endSession();
-  //     }
-  //   } catch (error) {
-  //     // ----------------------------
-  //     // 5️⃣ Fail-safe
-  //     // ----------------------------
-  //     await updateTradeStatusAndLogSafe(trade._id, ALLOWED_STATES.FAILED, {
-  //       message: `Cancellation failed: ${error.message}`,
-  //       role: "system",
-  //       actor: null,
-  //       ip,
-  //     });
-  //     throw error;
-  //   }
-  // },
   // ✅ Auto-open disputes when buyer goes silent
   async cancelTrade(reference, userId, ip = null) {
     if (!reference) throw new TradeError("Reference required");
@@ -1031,6 +862,73 @@ module.exports = {
     ]);
 
     return { trades, total, page, pageSize };
+  },
+  async openDispute(reference, userId, data, ip = null) {
+    const { reason, evidenceUrl } = data;
+
+    if (!reference) throw new TradeError("Trade reference is required");
+
+    const trade = await P2PTrade.findOne({ reference });
+    if (!trade) throw new TradeError("Trade not found", 404);
+
+    // 1. Authorization: Only the participants can dispute
+    const isBuyer = trade.userId.toString() === userId.toString();
+    const isMerchant = trade.merchantId.toString() === userId.toString();
+    if (!isBuyer && !isMerchant) throw new TradeError("Unauthorized", 403);
+
+    // 2. Guard: Prevent disputing finished or already disputed trades
+    const terminalStates = [
+      "COMPLETED",
+      "CANCELLED",
+      "CANCELLED_REVERSED",
+      "FAILED",
+      "DISPUTE_PENDING",
+    ];
+    if (terminalStates.includes(trade.status)) {
+      throw new TradeError(
+        `Cannot dispute trade in status: ${trade.status}`,
+        409,
+      );
+    }
+
+    // 3. Update the trade document
+    const updatedTrade = await P2PTrade.findOneAndUpdate(
+      { _id: trade._id },
+      {
+        $set: {
+          status: "DISPUTE_PENDING",
+          "disputeDetails.openedBy": userId,
+          "disputeDetails.reason": reason,
+        },
+        $push: {
+          // Add evidence if provided
+          ...(evidenceUrl && {
+            "disputeDetails.evidence": {
+              url: evidenceUrl,
+              uploadedBy: userId,
+              createdAt: new Date(),
+            },
+          }),
+          // Always log the event
+          logs: {
+            message: `Dispute opened. Reason: ${reason}`,
+            actor: userId,
+            role: isBuyer ? "buyer" : "merchant",
+            ip,
+            time: new Date(),
+          },
+        },
+      },
+      { new: true },
+    ).lean();
+
+    // 4. Trigger Notifications (Async)
+    // setImmediate(() => {
+    //   notifyAdminOfDispute(updatedTrade._id);
+    //   notifyOppositePartyOfDispute(updatedTrade._id, userId);
+    // });
+
+    return updatedTrade;
   },
 
   async autoOpenDisputesForSilentBuyers() {
