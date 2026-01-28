@@ -8,7 +8,7 @@ const Decimal = require("decimal.js");
 const fetchPaycrestRate = require("./paycrest/fetchRate");
 const createPaycrestOrder = require("./paycrest/createOrder");
 // --- GLOBAL CONSTANTS --- (Must be defined or imported from config)
-const CRYPTO_NETWORK = process.env.PAYCREST_CRYPTO_NETWORK || "Base";
+const CRYPTO_NETWORK = process.env.PAYCREST_CRYPTO_NETWORK || "base";
 
 /**
  * Creates a Paycrest withdrawal order (off-chain commitment) and deducts funds atomically.
