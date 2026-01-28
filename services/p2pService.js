@@ -866,21 +866,21 @@ module.exports = {
     const user = await checkUser(userId);
     const isAdmin = user.role === "admin";
 
-    // Determine Roles
+    // 1. Determine Roles
     const isBuyer = trade.userId.toString() === userId.toString();
     const isMerchant = trade.merchantId.toString() === userId.toString();
 
-    // Identify the SELLER: In BUY side, Merchant is Seller. In SELL side, User is Seller.
+    // Identify SELLER: In BUY side, Merchant is Seller. In SELL side, User is Seller.
     const isSeller =
       (trade.side === "BUY" && isMerchant) ||
       (trade.side === "SELL" && isBuyer);
 
-    // ✅ Requirement: Seller cannot cancel while trade is active
+    // 2. Authorization Check
     if (isSeller && !isAdmin) {
       const isExpired = new Date() > new Date(trade.expiresAt);
       if (!isExpired) {
         throw new TradeError(
-          "As the seller, you cannot cancel while the trade is active. Please wait for the timer to expire or contact support.",
+          "As the seller, you cannot cancel while the trade is active.",
           403,
         );
       }
@@ -888,7 +888,7 @@ module.exports = {
       throw new TradeError("Not authorized to cancel this trade", 403);
     }
 
-    // Terminal states check
+    // 3. State Check
     const terminalStates = [
       ALLOWED_STATES.COMPLETED,
       ALLOWED_STATES.CANCELLED,
@@ -902,17 +902,22 @@ module.exports = {
       );
     }
 
-    // ✅ Requirement: Money should return if it was escrowed
-    const requiresEscrowReversal = !!trade.escrowTxId;
+    // 4. Money Reversal Logic (Combined Safety Check)
+    const requiresEscrowReversal =
+      !!trade.escrowTxId ||
+      ["PENDING_PAYMENT", "PAYMENT_CONFIRMED_BY_BUYER", "INIT"].includes(
+        trade.status,
+      );
+
     let reversalTxId = null;
 
     try {
       if (requiresEscrowReversal) {
-        // Refund goes back to the seller
+        // The refund always goes back to the person who provided the crypto (The Seller)
         const refundRecipientId =
-          trade.side === "BUY" ? trade.merchantId : trade.userId;
+          trade.side === "SELL" ? trade.userId : trade.merchantId;
         const sourceCurrency = trade.currencyTarget;
-        const refundAmount = trade.amountCrypto; // The full gross amount escrowed
+        const refundAmount = trade.amountCrypto;
 
         const destinationWalletId = await resolveUserWalletId(
           refundRecipientId,
@@ -933,16 +938,16 @@ module.exports = {
         );
 
         if (!transferResult)
-          throw new TradeError("Escrow reversal failed at provider");
+          throw new TradeError("Escrow reversal failed at provider level");
         reversalTxId =
-          transferResult?.data?.id || transferResult?.txId || "n/a";
+          transferResult?.data?.id || transferResult?.txId || "REVERSED";
       }
 
-      // ✅ Requirement: Restore availableAmount to original state
+      // 5. Database Transaction (Restore Liquidity & Update Status)
       const session = await mongoose.startSession();
       session.startTransaction();
       try {
-        // Calculate the base amount originally deducted (excluding user fees)
+        // Restore exact base amount to the Ad
         const baseAmountToRestore =
           trade.side === "BUY"
             ? trade.amountCrypto
@@ -962,7 +967,7 @@ module.exports = {
           trade._id,
           newStatus,
           {
-            message: `Cancelled. Funds returned to seller. Initiated by ${isAdmin ? "Admin" : isBuyer ? "Buyer" : "Merchant"}.`,
+            message: `Cancelled. Funds returned. Initiated by ${isAdmin ? "Admin" : isBuyer ? "Buyer" : "Merchant"}.`,
             actor: userId,
             ip,
           },
@@ -970,10 +975,10 @@ module.exports = {
           session,
         );
 
-        // Record refund in Ledger
+        // Record refund in internal Ledger
         if (requiresEscrowReversal) {
           const refundRecipientId =
-            trade.side === "BUY" ? trade.merchantId : trade.userId;
+            trade.side === "SELL" ? trade.userId : trade.merchantId;
           await createIdempotentTransaction(
             {
               idempotencyKey: `P2P:${trade._id}:REFUND`,
@@ -993,6 +998,8 @@ module.exports = {
         }
 
         await session.commitTransaction();
+
+        // 6. Finalize (Clear Cache)
         await redisClient.del(`balances:${trade.merchantId}`);
         await redisClient.del(`balances:${trade.userId}`);
 
@@ -1007,7 +1014,6 @@ module.exports = {
       throw error;
     }
   },
-
   // ✅ Fix: Hide cancelled trades so they don't "reappear" on refresh
   async listTrades(filter = {}, page = 1, pageSize = 20) {
     const q = { ...filter };

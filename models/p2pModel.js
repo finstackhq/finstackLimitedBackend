@@ -112,6 +112,10 @@ const P2PTradeSchema = new mongoose.Schema(
       required: true,
     },
 
+    escrowTxId: {
+      type: String,
+      index: true,
+    },
     // =====================
     // STATE MACHINE
     // =====================
@@ -119,8 +123,8 @@ const P2PTradeSchema = new mongoose.Schema(
       type: String,
       enum: [
         "PENDING_PAYMENT",
-        "MERCHANT_PAID",     
-    "DISPUTE_PENDING",
+        "MERCHANT_PAID",
+        "DISPUTE_PENDING",
         "PAYMENT_CONFIRMED_BY_BUYER",
         "COMPLETED",
         "CANCELLED",
@@ -131,23 +135,23 @@ const P2PTradeSchema = new mongoose.Schema(
       index: true,
     },
 
-  notifications: {
-  merchantNotified: {
-    type: Boolean,
-    default: false,
-    index: true,
-  },
-  buyerPaidNotified: {
-    type: Boolean,
-    default: false,
-    index: true,
-  },
-  // disputeNotified: {
-  //   type: Boolean,
-  //   default: false,
-  //   index: true,
-  // },
-},
+    notifications: {
+      merchantNotified: {
+        type: Boolean,
+        default: false,
+        index: true,
+      },
+      buyerPaidNotified: {
+        type: Boolean,
+        default: false,
+        index: true,
+      },
+      // disputeNotified: {
+      //   type: Boolean,
+      //   default: false,
+      //   index: true,
+      // },
+    },
 
     // =====================
     // TIME CONTROL
@@ -159,11 +163,11 @@ const P2PTradeSchema = new mongoose.Schema(
     },
 
     paymentDetails: {
-        bankName: { type: String },
-        accountNumber: { type: String },
-        accountName: { type: String },
-        bankCode: { type: String },
-        country: { type: String, default: "NG" }
+      bankName: { type: String },
+      accountNumber: { type: String },
+      accountName: { type: String },
+      bankCode: { type: String },
+      country: { type: String, default: "NG" },
     },
     // =====================
     // OPTIONAL METADATA
@@ -186,7 +190,7 @@ const P2PTradeSchema = new mongoose.Schema(
       },
     ],
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Helpful compound indexes
