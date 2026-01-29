@@ -35,7 +35,7 @@ const merchantAdSchema = new mongoose.Schema(
     price: {
       type: Number,
       required: true,
-      min: 0.01,
+      min: 0.00000001,
     },
 
     rawPrice: {
@@ -56,7 +56,7 @@ const merchantAdSchema = new mongoose.Schema(
     minLimit: {
       type: Number,
       required: true,
-      min: 0.01,
+      min: 0.00000001,
     },
     maxLimit: {
       type: Number,
@@ -107,7 +107,7 @@ const merchantAdSchema = new mongoose.Schema(
       maxlength: 1000, // Limit for reasonable text length
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 const MerchantAd = mongoose.model("MerchantAd", merchantAdSchema); // Renamed model to MerchantAd for clarity
