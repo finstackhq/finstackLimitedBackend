@@ -122,6 +122,7 @@ const createMerchantAd = async (req, res) => {
       data: ad,
     });
   } catch (error) {
+    console.log("FULL ERROR STACK:", error);
     logger.error("Error creating merchant ad:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }

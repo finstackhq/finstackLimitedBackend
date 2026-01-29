@@ -116,54 +116,6 @@ const getDepositAddress = async (req, res) => {
   }
 };
 
-// 1️⃣ STEP 1: INITIATION (Request OTP)
-// IMPLEMENT PAYCREST WITHDRAWAL LOGIC
-// const initiateWithdrawal = async (req, res) => {
-//   try {
-//     const { walletCurrency, amount } = req.body;
-
-//     if (!walletCurrency || !amount) {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "Required fields are missing" });
-//     }
-
-//     logger.info(`Initiating withdrawal OTP for user ${req.user.id}`);
-
-//     const user = await User.findById(req.user.id);
-//     if (!user)
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "User not found" });
-
-//     const wallet = await Wallet.findOne({
-//       currency: walletCurrency,
-//       user_id: req.user.id,
-//     });
-//     if (!wallet)
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Wallet not found" });
-
-//     // Perform preliminary balance check before sending OTP
-//     if (wallet.balance < amount) {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "Insufficient wallet balance" });
-//     }
-
-//     await generateAndSendOtp(req.user.id, "WITHDRAWAL", user.email);
-
-//     return res.status(200).json({
-//       success: true,
-//       message:
-//         "Verification code sent to your email. Please check your inbox/spam folder.",
-//     });
-//   } catch (error) {
-//     logger.error("initiateWithdrawal error:", error);
-//     return res.status(500).json({ success: false, message: error.message });
-//   }
-// };
 const initiateWithdrawal = async (req, res) => {
   try {
     const { walletCurrency, amount } = req.body;
